@@ -212,7 +212,7 @@ Developer-agent users can run the firewall as a one-click local sidecar from the
 
 | IDE | Location | Status |
 |---|---|---|
-| VS Code / Cursor-compatible | `extensions/vscode` | Private beta scaffold: start, stop, restart, metrics, copy env, SecretStorage API key |
+| VS Code / Cursor-compatible | `extensions/vscode` | Stable release: start, stop, restart, metrics, copy env, SecretStorage API key |
 | JetBrains IDEs | `extensions/jetbrains` | Private beta scaffold: Tools menu actions, process manager, metrics, copy env |
 
 Both extensions auto-discover the `ai-firewall` binary in:

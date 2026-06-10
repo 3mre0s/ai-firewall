@@ -1,0 +1,9 @@
+.vscode/**
+.vscode-test/**
+node_modules/**
+.gitignore
+.eslintrc*
+**/*.map
+**/.DS_Store
+**/Thumbs.db
+**/*.vsix

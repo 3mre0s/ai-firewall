@@ -1,0 +1,92 @@
+# .github/workflows/release.yml
+#
+# Triggered by pushing a version tag: git tag v1.0.0 && git push origin v1.0.0
+# Builds cross-platform binaries, creates a GitHub Release, and attaches them.
+# Checksums are generated automatically for verification.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Run tests before releasing
+        run: go test ./... -count=1 -timeout 60s
+
+      - name: Build cross-platform binaries
+        run: |
+          mkdir -p dist
+          VERSION="${{ github.ref_name }}"
+
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+          )
+
+          for platform in "${platforms[@]}"; do
+            GOOS="${platform%/*}"
+            GOARCH="${platform#*/}"
+            EXT=""
+            [ "$GOOS" = "windows" ] && EXT=".exe"
+
+            OUTPUT="dist/ai-firewall-${VERSION}-${GOOS}-${GOARCH}${EXT}"
+
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+              go build \
+                -ldflags="-w -s -X main.version=${VERSION}" \
+                -o "$OUTPUT" .
+
+            echo "Built: $OUTPUT"
+          done
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum * > checksums.txt && cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            Download the binary for your platform below, make it executable, and run:
+
+            ```bash
+            # Linux / macOS
+            chmod +x ai-firewall-${{ github.ref_name }}-linux-amd64
+            export FORWARD_API_KEY=sk-...
+            ./ai-firewall-${{ github.ref_name }}-linux-amd64
+            ```
+
+            See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full configuration.
+
+            ## Verify checksums
+            ```bash
+            sha256sum -c checksums.txt
+            ```

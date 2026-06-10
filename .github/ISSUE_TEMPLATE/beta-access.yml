@@ -1,0 +1,66 @@
+name: Beta access request
+description: Request a slot in the private beta.
+title: "[beta] access request — <your-handle>"
+labels: ["beta", "access-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for wanting to test Local AI Firewall.
+        We add testers in small batches so we can actually answer your questions.
+  - type: input
+    id: handle
+    attributes:
+      label: GitHub / Discord handle
+      placeholder: "@octocat"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Primary OS
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: ide
+    attributes:
+      label: Primary IDE
+      options:
+        - VS Code
+        - Cursor
+        - JetBrains (IntelliJ / GoLand / PyCharm / WebStorm / other)
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: providers
+    attributes:
+      label: Providers you'd actually test against
+      options:
+        - label: Anthropic
+        - label: OpenAI
+        - label: Gemini
+        - label: Groq / Together / Mistral / DeepSeek / xAI
+        - label: Local (Ollama / LM Studio)
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: One paragraph. What are you trying to keep out of the upstream prompt?
+    validations:
+      required: true
+  - type: checkboxes
+    id: agreements
+    attributes:
+      label: Agreements
+      options:
+        - label: I understand this is pre-release software with no SLA.
+          required: true
+        - label: I will report bugs in GitHub issues or the beta Discord, not on social media.
+          required: true

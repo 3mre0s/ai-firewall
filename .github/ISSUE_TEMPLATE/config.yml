@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Beta Discord (invite-only)
+    url: https://example.invalid/REPLACE_WITH_DISCORD_INVITE_URL
+    about: Realtime help during the private beta. DM for an invite.
+  - name: Beta feedback form
+    url: https://example.invalid/REPLACE_WITH_FEEDBACK_FORM_URL
+    about: 2-minute survey for beta testers.

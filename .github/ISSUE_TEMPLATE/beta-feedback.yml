@@ -1,0 +1,74 @@
+name: Beta feedback / bug
+description: Report a bug or share feedback from the private beta.
+title: "[beta] <one-line summary>"
+labels: ["beta", "feedback"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Bug — firewall crashed or misbehaved
+        - Bug — extension didn't find the binary
+        - Bug — wrong header / 4xx from upstream
+        - Bug — secret leaked through (please redact)
+        - Feedback — UX / install friction
+        - Feedback — missing pattern or provider
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows 11 / 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Firewall version
+      description: From the release tag, e.g. v0.1.0
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: upstream
+    attributes:
+      label: Upstream provider
+      options:
+        - Anthropic
+        - OpenAI
+        - Gemini
+        - Azure OpenAI
+        - Groq / Together / Mistral / Perplexity / DeepSeek / xAI / Cohere
+        - Ollama / LM Studio
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Smallest steps that reproduce the issue. Redact any real key or PII.
+      placeholder: |
+        1. ai-firewall starts on :8080
+        2. curl -X POST http://localhost:8080/v1/messages -d '{ ... }'
+        3. firewall returns 502, upstream log shows "missing x-api-key"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Run with LOG_LEVEL=debug and paste only the relevant lines. Redact secrets.
+      render: shell
+  - type: textarea
+    id: metrics
+    attributes:
+      label: /metrics snapshot (optional)
+      description: Output of `curl http://localhost:8080/metrics`
+      render: json

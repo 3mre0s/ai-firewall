@@ -1,0 +1,23 @@
+# ── Binaries ─────────────────────────────────────────────────────────────────
+ai-firewall
+ai-firewall.exe
+dist/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+# Never commit real API keys.
+.env
+*.local.env
+
+# ── Go ───────────────────────────────────────────────────────────────────────
+*.test
+*.out
+vendor/
+coverage.html
+coverage.out
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store

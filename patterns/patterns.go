@@ -164,4 +164,47 @@ var Registry = []SensitivePattern{
 		Regex:  regexp.MustCompile(`\b[a-zA-Z0-9._%+\-]{2,}@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,6}\b`),
 		Prefix: "EMAIL",
 	},
+	{
+		// Matches credit card numbers with optional spaces/dashes between groups.
+		// Covers Visa (13-19 digits), Mastercard (16), Amex (15), Discover (16-19).
+		// (Gruplar arasında isteğe bağlı boşluk/tire ile kredi kartı numaralarını eşleştirir.)
+		Name:   "Credit Card Number (Kredi Kartı Numarası)",
+		Type:   TypePII,
+		Regex:  regexp.MustCompile(`\b(?:\d{4}[\s\-]?){3}\d{1,4}\b`),
+		Prefix: "CC",
+	},
+	{
+		// Turkish IBAN: TR + 2 check digits + 22 account digits (total 26 chars).
+		// (Türk IBAN'ı: TR + 2 kontrol hanesi + 22 hesap hanesi, toplam 26 karakter.)
+		Name:   "Turkish IBAN",
+		Type:   TypePII,
+		Regex:  regexp.MustCompile(`\bTR\d{24}\b`),
+		Prefix: "IBAN_TR",
+	},
+	{
+		// International IBAN: 2 letter country code + 2 check digits + up to 30 alphanumeric.
+		// (Uluslararası IBAN: 2 harf ülke kodu + 2 kontrol hanesi + 30 alfanümerik.)
+		Name:   "IBAN",
+		Type:   TypePII,
+		Regex:  regexp.MustCompile(`\b[A-Z]{2}\d{2}[A-Z0-9]{1,30}\b`),
+		Prefix: "IBAN",
+	},
+	{
+		// Turkish National ID (TC Kimlik No): 11 digits, first digit cannot be 0.
+		// Note: Full checksum validation is not feasible in regex.
+		// (Türk Kimlik Numarası: 11 hane, ilk hane 0 olamaz. Tam sağlama doğrulaması regex'te uygulanamaz.)
+		Name:   "Turkish National ID (TC Kimlik No)",
+		Type:   TypePII,
+		Regex:  regexp.MustCompile(`\b[1-9]\d{10}\b`),
+		Prefix: "TC_ID",
+	},
+	{
+		// Turkish phone numbers: +90 xxx xxx xx xx, 0xxx xxx xx xx, etc.
+		// Handles various formats with optional country code, parens, spaces.
+		// (Türk telefon numaraları: isteğe bağlı ülke kodu, parantez, boşluk ile çeşitli formatları destekler.)
+		Name:   "Turkish Phone Number (Türk Telefon Numarası)",
+		Type:   TypePII,
+		Regex:  regexp.MustCompile(`\b(?:\+90|0)?[\s\(]?[1-9]\d{2}[\s\)]?\d{3}[\s]?\d{2}[\s]?\d{2}\b`),
+		Prefix: "PHONE_TR",
+	},
 }

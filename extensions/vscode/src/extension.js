@@ -44,6 +44,7 @@ let secrets;
 async function activate(ctx) {
     secrets = ctx.secrets;
     out     = vscode.window.createOutputChannel('Local AI Firewall');
+    ctx.subscriptions.push(out);
 
     // Status bar — always visible on the right side, click = toggle
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -166,8 +167,11 @@ async function cmdStop() {
 async function cmdRestart(ctx) {
     if (proc) {
         await cmdStop();
-        // wait for port to release
-        await sleep(700);
+        // wait for proc to become null (max 2 seconds)
+        const deadline = Date.now() + 2000;
+        while (proc !== null && Date.now() < deadline) {
+            await sleep(50);
+        }
     }
     await cmdStart(ctx);
 }
@@ -381,7 +385,10 @@ async function resolveApiKey() {
     if (fromSecret) return fromSecret;
 
     const fromSettings = cfg().get('forwardApiKey');
-    if (fromSettings) return fromSettings;
+    if (fromSettings) {
+        vscode.window.showWarningMessage('API key found in settings. Consider using Set API Key command for better security.');
+        return fromSettings;
+    }
 
     // Nothing stored — ask now
     await cmdSetApiKey();

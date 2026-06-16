@@ -1,0 +1,37 @@
+# ── Binaries ──────────────────────────────────────────────────────────────────
+ai-firewall
+ai-firewall.exe
+ai-firewall-*
+*.exe
+dist/
+
+# ── MITM CA key / cert (never commit private key material) ───────────────────
+ca.key
+ca.crt
+.ai-firewall/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+*.local.env
+
+# ── Go ────────────────────────────────────────────────────────────────────────
+*.test
+*.out
+vendor/
+coverage.*
+
+# ── Node.js ───────────────────────────────────────────────────────────────────
+node_modules/
+extensions/*/node_modules/
+*.vsix
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# ── Build artifacts ────────────────────────────────────────────────────────────
+dist/
+*.vsix
+*.swp
+*.swo
+.DS_Store

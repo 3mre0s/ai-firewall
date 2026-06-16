@@ -1,0 +1,23 @@
+<idea-plugin>
+    <id>com.localai.firewall</id>
+    <name>Local AI Firewall</name>
+    <vendor email="security@example.com">Local AI Firewall</vendor>
+    <description>Run Local AI Firewall as a localhost sidecar for AI coding agents.</description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Local AI Firewall" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <group id="LocalAiFirewall.Group" text="Local AI Firewall" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="LocalAiFirewall.Start" class="com.localai.firewall.StartFirewallAction" text="Start"/>
+            <action id="LocalAiFirewall.Stop" class="com.localai.firewall.StopFirewallAction" text="Stop"/>
+            <action id="LocalAiFirewall.Restart" class="com.localai.firewall.RestartFirewallAction" text="Restart"/>
+            <action id="LocalAiFirewall.CopyEnv" class="com.localai.firewall.CopyEnvAction" text="Copy Agent Env"/>
+            <action id="LocalAiFirewall.OpenMetrics" class="com.localai.firewall.OpenMetricsAction" text="Open Metrics"/>
+        </group>
+    </actions>
+</idea-plugin>

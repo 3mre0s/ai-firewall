@@ -1,0 +1,142 @@
+{
+  "name": "local-ai-firewall",
+  "displayName": "Local AI Firewall",
+  "description": "Run Local AI Firewall as a localhost sidecar for AI coding agents.",
+  "version": "0.1.0",
+  "publisher": "localai",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/localai/firewall.git",
+    "directory": "extensions/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/localai/firewall/issues"
+  },
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "firewall",
+    "privacy",
+    "proxy",
+    "anthropic",
+    "openai"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:localAiFirewall.start",
+    "onCommand:localAiFirewall.stop",
+    "onCommand:localAiFirewall.restart",
+    "onCommand:localAiFirewall.setApiKey",
+    "onCommand:localAiFirewall.openMetrics",
+    "onCommand:localAiFirewall.copyEnv"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "localAiFirewall.start",
+        "title": "Local AI Firewall: Start"
+      },
+      {
+        "command": "localAiFirewall.stop",
+        "title": "Local AI Firewall: Stop"
+      },
+      {
+        "command": "localAiFirewall.restart",
+        "title": "Local AI Firewall: Restart"
+      },
+      {
+        "command": "localAiFirewall.setApiKey",
+        "title": "Local AI Firewall: Set API Key"
+      },
+      {
+        "command": "localAiFirewall.openMetrics",
+        "title": "Local AI Firewall: Open Metrics"
+      },
+      {
+        "command": "localAiFirewall.copyEnv",
+        "title": "Local AI Firewall: Copy Agent Env"
+      }
+    ],
+    "configuration": {
+      "title": "Local AI Firewall",
+      "properties": {
+        "localAiFirewall.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the ai-firewall binary. Defaults to ./ai-firewall or ./ai-firewall.exe in the workspace."
+        },
+        "localAiFirewall.forwardApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional fallback API key. Prefer the Set API Key command, which stores the key in VS Code SecretStorage."
+        },
+        "localAiFirewall.upstreamUrl": {
+          "type": "string",
+          "default": "https://api.anthropic.com",
+          "description": "Upstream AI provider URL."
+        },
+        "localAiFirewall.providerHint": {
+          "type": "string",
+          "default": "",
+          "description": "Optional provider hint: anthropic, openai, gemini, groq, azure, ollama, generic, etc."
+        },
+        "localAiFirewall.port": {
+          "type": "number",
+          "default": 8080,
+          "description": "Local firewall port."
+        },
+        "localAiFirewall.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "silent",
+            "info",
+            "debug"
+          ],
+          "description": "Firewall log verbosity."
+        },
+        "localAiFirewall.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the firewall automatically when VS Code opens."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "localAiFirewall.start"
+        },
+        {
+          "command": "localAiFirewall.stop"
+        },
+        {
+          "command": "localAiFirewall.restart"
+        },
+        {
+          "command": "localAiFirewall.setApiKey"
+        },
+        {
+          "command": "localAiFirewall.openMetrics"
+        },
+        {
+          "command": "localAiFirewall.copyEnv"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "package": "vsce package --out local-ai-firewall.vsix",
+    "package:beta": "vsce package --pre-release --out local-ai-firewall.vsix"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.32.0"
+  }
+}

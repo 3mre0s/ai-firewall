@@ -18,7 +18,6 @@
 ---
 
 ![demo](docs/demo.gif)
-*Demo: `ai-firewall` intercepting a request, masking secrets, and restoring them in the response.*
 
 ## Quickstart (3 steps)
 

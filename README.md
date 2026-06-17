@@ -285,7 +285,8 @@ go vet ./...
 
 ```bash
 go test -bench=. -benchmem ./...
-# BenchmarkStreamProcessing_ZeroAlloc: ~29 µs/op · 209 B/op · 4 allocs/op
+# BenchmarkStreamProcessing: ~28 µs/op · 4 allocs/op   (clean SSE chunk, no secrets)
+# BenchmarkMasking:          ~33 µs/op · 101 allocs/op  (request body with PAT + email)
 ```
 
 ---

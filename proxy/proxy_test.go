@@ -598,12 +598,14 @@ func TestPatternMasking_TableDriven(t *testing.T) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BENCHMARK TESTS: Zero-Allocation Verification
+// BENCHMARKS
 // ══════════════════════════════════════════════════════════════════════════════
 
-func BenchmarkStreamProcessing_ZeroAlloc(b *testing.B) {
-	// Create test setup
-	v := vault.New(1000)
+// BenchmarkStreamProcessing measures the per-chunk cost of the StreamProcessor
+// on a clean SSE chunk (no secrets, no labels). This is the steady-state hot
+// path when the model is generating ordinary text. A single proc is reused for
+// the full run to match how production code works (one proc per response).
+func BenchmarkStreamProcessing(b *testing.B) {
 	cfg := &config.Config{
 		UpstreamURL:    "http://localhost:8080",
 		ForwardAPIKey:  "test-key",
@@ -612,39 +614,41 @@ func BenchmarkStreamProcessing_ZeroAlloc(b *testing.B) {
 		VaultSizeLimit: 1000,
 		LogLevel:       "silent",
 	}
-	m := masker.New(v, cfg)
+	m := masker.New(vault.New(1000), cfg)
 	proc := NewStreamProcessor(m)
 
-	// Simulate SSE chunks
 	chunk := []byte("data: {\"choices\": [{\"delta\": {\"content\": \"Hello world\"}}]}\n\n")
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	// Benchmark should show minimal allocations
 	for i := 0; i < b.N; i++ {
 		proc.Process(chunk)
 	}
 }
 
-func BenchmarkMaskingPerformance(b *testing.B) {
-	v := vault.New(10000)
+// BenchmarkMasking measures the cost of scanning one request body that contains
+// a real GitHub PAT and an email address — the two most common secret types.
+// The vault is freshly allocated each iteration (via b.StopTimer) so the vault
+// never fills and every run exercises the full regex + store path.
+func BenchmarkMasking(b *testing.B) {
 	cfg := &config.Config{
 		UpstreamURL:    "http://localhost:8080",
 		ForwardAPIKey:  "test-key",
 		MaskPaths:      true,
 		MaskEmails:     true,
-		VaultSizeLimit: 10000,
+		VaultSizeLimit: 1000,
 		LogLevel:       "silent",
 	}
-	m := masker.New(v, cfg)
-
 	input := "Email: test@example.com Token: ghp_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-	b.ResetTimer()
 	b.ReportAllocs()
+	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		m := masker.New(vault.New(1000), cfg)
+		b.StartTimer()
 		m.Mask(input)
 	}
 }

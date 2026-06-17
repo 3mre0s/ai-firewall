@@ -85,7 +85,8 @@ Environment variable-only; no config file needed.
 ### Performance
 - Pre-compiled regex patterns (zero allocation per match after startup)
 - O(1) vault lookups via hash maps; lock-free metrics counters (atomic primitives)
-- Streaming processing: **~29 µs/op · 209 B/op · 4 allocs/op** (`BenchmarkStreamProcessing_ZeroAlloc`)
+- Stream processing (clean SSE chunk): **~28 µs/op · 4 allocs/op** (`BenchmarkStreamProcessing`)
+- Request masking (body with PAT + email): **~33 µs/op · 101 allocs/op** (`BenchmarkMasking`)
 - Typical memory footprint < 10 MB under local workload
 
 ### Security

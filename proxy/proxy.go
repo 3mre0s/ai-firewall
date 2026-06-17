@@ -172,7 +172,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// ── Step 3: Forward the clean request upstream ───────────────────────────
 	// (Temiz isteği yukarı yönlü ilet)
-	
+
 	// SSRF Protection: Use r.URL.Path and r.URL.RawQuery strictly instead of
 	// r.URL.RequestURI() which might contain an absolute URI from a malicious client.
 	// (SSRF Koruması: Kötü niyetli bir istemciden gelen tam URL'leri engellemek için
@@ -341,7 +341,7 @@ var allowedRequestHeaders = []string{
 	"Anthropic-Version",
 	"Anthropic-Beta",
 	"Openai-Organization",
-	"Authorization",  // passthrough mode (FORWARD_API_KEY=none): client's Bearer token flows through
+	"Authorization", // passthrough mode (FORWARD_API_KEY=none): client's Bearer token flows through
 	"X-Api-Key",
 	"X-Goog-Api-Key",
 	"Api-Key",

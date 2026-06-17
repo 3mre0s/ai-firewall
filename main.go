@@ -200,8 +200,9 @@ func main() {
 // vb.) yalnızca yerel operatörler tarafından görülmeli.
 //
 // (Purpose: hide /metrics from external networks and AI providers.
-//  Internal state — vault occupancy, mask counts, etc. — should only
-//  be visible to the local operator.)
+//
+//	Internal state — vault occupancy, mask counts, etc. — should only
+//	be visible to the local operator.)
 func localhostOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// RemoteAddr biçimi: "IP:port" veya "[IPv6]:port"
@@ -317,7 +318,8 @@ func runVersion() {
 // running without arguments still starts the server.
 //
 // (Kısa komut referansını yazdırır. Yalnızca "help"/"-h"/"--help" için gösterilir;
-//  argümansız çalıştırma sunucuyu başlatmaya devam eder.)
+//
+//	argümansız çalıştırma sunucuyu başlatmaya devam eder.)
 func runUsage() {
 	fmt.Print(`ai-firewall — Local AI Firewall
 

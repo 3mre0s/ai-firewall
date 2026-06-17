@@ -8,7 +8,7 @@
 //  3. Set GroupIndex > 0 only when a surrounding context is needed to
 //     identify the secret but should NOT itself be replaced.
 //     (Gizliliği tanımlamak için çevreleyen bağlam gerektiğinde ancak
-//      o bağlamın kendisi değiştirilmemesi gerektiğinde GroupIndex > 0 ayarlayın.)
+//     o bağlamın kendisi değiştirilmemesi gerektiğinde GroupIndex > 0 ayarlayın.)
 package patterns
 
 import "regexp"
@@ -56,9 +56,10 @@ type SensitivePattern struct {
 // schema constants like 9007199254740991) that happen to fall into 13-19
 // digit groups of 4 but aren't valid card numbers.
 // (s, hane grupları arasında boşluk veya tire içerebilir; bunlar doğrulamadan
-//  önce ayıklanır. Kredi kartı numarası OLMAYAN ama 4'lü gruplar halinde
-//  13-19 haneye denk gelen düz ondalık sayıları (zaman damgaları, bayt
-//  sayıları, 9007199254740991 gibi şema sabitleri) eler.)
+//
+//	önce ayıklanır. Kredi kartı numarası OLMAYAN ama 4'lü gruplar halinde
+//	13-19 haneye denk gelen düz ondalık sayıları (zaman damgaları, bayt
+//	sayıları, 9007199254740991 gibi şema sabitleri) eler.)
 func validateLuhn(s string) bool {
 	d := make([]int, 0, 19)
 	for i := 0; i < len(s); i++ {
@@ -247,7 +248,7 @@ func validateCodiceFiscale(s string) bool {
 		var val int
 		if ch >= '0' && ch <= '9' {
 			val = int(ch - '0') // 0-9 for even positions; use cfOddVals index for odd
-			if i%2 == 0 { // 0-indexed even = 1-indexed odd position
+			if i%2 == 0 {       // 0-indexed even = 1-indexed odd position
 				val = cfOddVals[int(ch-'0')]
 			}
 		} else if ch >= 'A' && ch <= 'Z' {
@@ -316,7 +317,8 @@ func validateTCKimlik(s string) bool {
 // Registry is the ordered list of all patterns the Masker applies.
 // Order matters: more specific patterns should come before broad ones.
 // (Masker'ın uyguladığı tüm desenlerin sıralı listesi.
-//  Sıra önemlidir: daha spesifik desenler geniş olanlardan önce gelmeli.)
+//
+//	Sıra önemlidir: daha spesifik desenler geniş olanlardan önce gelmeli.)
 var Registry = []SensitivePattern{
 
 	// ── Tokens & API Keys (Anahtarlar ve API Jetonları) ───────────────────────

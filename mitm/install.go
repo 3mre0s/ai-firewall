@@ -183,8 +183,9 @@ func checkWindows() bool {
 // without actually executing anything.
 //
 // (Program adı ve argümanlarından oluşan minimal komut tanımı.
-//  exec.Command'dan ayrı tutulması, testlerin gerçekten çalıştırmadan
-//  amaçlanan çağrıyı incelemesini sağlar.)
+//
+//	exec.Command'dan ayrı tutulması, testlerin gerçekten çalıştırmadan
+//	amaçlanan çağrıyı incelemesini sağlar.)
 type osCmd struct {
 	prog string
 	args []string

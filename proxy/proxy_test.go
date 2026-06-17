@@ -77,16 +77,16 @@ func TestEmailMaskingRoundTrip(t *testing.T) {
 
 	// Capture what upstream receives
 	var upstreamReceivedBody string
-	
+
 	// Mock upstream that echoes back the request body
 	upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		upstreamReceivedBody = string(body)
-		
+
 		// Echo back the masked content
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		
+
 		// Echo back exactly what we received (should contain masked labels)
 		response := map[string]interface{}{
 			"choices": []map[string]interface{}{
@@ -153,7 +153,7 @@ func TestEmailMaskingRoundTrip(t *testing.T) {
 	if snapshot.MaskedItems == 0 {
 		t.Error("FAIL: MaskedItems metric is 0, expected at least 1")
 	}
-	
+
 	t.Logf("✓ Round-trip successful: upstream saw masked data, client received original")
 	t.Logf("  Upstream received (masked): %s", upstreamReceivedBody)
 	t.Logf("  Client received (unmasked): %s", responseStr)
@@ -558,7 +558,7 @@ func TestPatternMasking_TableDriven(t *testing.T) {
 
 			upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
-				
+
 				// Verify sensitive data is NOT in request to upstream
 				if tc.shouldMask && strings.Contains(string(body), tc.sensitiveValue) {
 					t.Errorf("LEAK: Sensitive value %q found in upstream request", tc.sensitiveValue)
@@ -754,16 +754,16 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 	// Mock upstream that echoes request in response
 	upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		
+
 		// Parse the request
 		var req map[string]interface{}
 		json.Unmarshal(body, &req)
-		
+
 		// Extract the content (which should be masked)
 		messages := req["messages"].([]interface{})
 		firstMsg := messages[0].(map[string]interface{})
 		maskedContent := firstMsg["content"].(string)
-		
+
 		// Echo back in response (will be unmasked by firewall)
 		response := map[string]interface{}{
 			"choices": []map[string]interface{}{
@@ -775,7 +775,7 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 				},
 			},
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	}
@@ -801,10 +801,10 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 	defer resp.Body.Close()
 
 	responseBody, _ := io.ReadAll(resp.Body)
-	
+
 	var response map[string]interface{}
 	json.Unmarshal(responseBody, &response)
-	
+
 	// Extract the unmasked content from response
 	if choices, ok := response["choices"].([]interface{}); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]interface{}); ok {
@@ -814,17 +814,17 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 					if content != originalContent {
 						t.Errorf("FAIL: Round-trip mismatch\nOriginal: %s\nGot:      %s", originalContent, content)
 					}
-					
+
 					// Verify no vault labels remain
 					if strings.Contains(content, "[[") {
 						t.Errorf("FAIL: Vault labels remain in final output: %s", content)
 					}
-					
+
 					return
 				}
 			}
 		}
 	}
-	
+
 	t.Errorf("FAIL: Could not extract content from response: %s", string(responseBody))
 }

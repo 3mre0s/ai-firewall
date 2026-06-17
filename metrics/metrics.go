@@ -7,7 +7,8 @@
 // The /metrics HTTP endpoint returns JSON so it works out-of-the-box
 // with cURL, Prometheus textfile collector, or any dashboard.
 // (/metrics HTTP uç noktası JSON döner; cURL, Prometheus veya herhangi bir
-//  gösterge paneliyle kutudan çıkar çıkmaz çalışır.)
+//
+//	gösterge paneliyle kutudan çıkar çıkmaz çalışır.)
 package metrics
 
 import (
@@ -113,10 +114,10 @@ type snapshot struct {
 	BlockedRequests int64 `json:"blocked_requests_total"`
 
 	// --- Vault occupancy (Vault doluluk) ---
-	VaultCurrent int     `json:"vault_current"`          // entries currently stored (mevcut giriş sayısı)
-	VaultLimit   int     `json:"vault_limit"`             // configured maximum (yapılandırılmış maksimum)
-	VaultFillPct string  `json:"vault_fill_pct"`          // occupancy percentage (doluluk yüzdesi)
-	VaultHits    int64   `json:"vault_unmask_hits_total"` // cumulative Retrieve() calls (kümülatif Retrieve() çağrıları)
+	VaultCurrent int    `json:"vault_current"`           // entries currently stored (mevcut giriş sayısı)
+	VaultLimit   int    `json:"vault_limit"`             // configured maximum (yapılandırılmış maksimum)
+	VaultFillPct string `json:"vault_fill_pct"`          // occupancy percentage (doluluk yüzdesi)
+	VaultHits    int64  `json:"vault_unmask_hits_total"` // cumulative Retrieve() calls (kümülatif Retrieve() çağrıları)
 }
 
 // Snapshot returns a point-in-time view of all metrics.
@@ -132,16 +133,16 @@ func (c *Counters) Snapshot(vault VaultStatsProvider) snapshot {
 	}
 
 	s := snapshot{
-		UptimeSeconds:  time.Since(c.startTime).Seconds(),
-		RequestsTotal:  reqs,
-		StreamRequests: atomic.LoadInt64(&c.StreamRequests),
-		MaskedItems:    atomic.LoadInt64(&c.MaskedItems),
-		MaskedRequests: masked,
-		UnmaskedItems:  atomic.LoadInt64(&c.UnmaskedItems),
-		UpstreamErrors: atomic.LoadInt64(&c.UpstreamErrors),
-		VaultEvictions: atomic.LoadInt64(&c.VaultEvictions),
+		UptimeSeconds:   time.Since(c.startTime).Seconds(),
+		RequestsTotal:   reqs,
+		StreamRequests:  atomic.LoadInt64(&c.StreamRequests),
+		MaskedItems:     atomic.LoadInt64(&c.MaskedItems),
+		MaskedRequests:  masked,
+		UnmaskedItems:   atomic.LoadInt64(&c.UnmaskedItems),
+		UpstreamErrors:  atomic.LoadInt64(&c.UpstreamErrors),
+		VaultEvictions:  atomic.LoadInt64(&c.VaultEvictions),
 		BlockedRequests: atomic.LoadInt64(&c.BlockedRequests),
-		MaskRate:       rate + "%",
+		MaskRate:        rate + "%",
 	}
 
 	// Attach vault occupancy if a provider was given.

@@ -136,20 +136,20 @@ func load(getenv func(string) string) (*Config, error) {
 	// (ProviderHint isteğe bağlıdır; yalnızca açıkça ayarlandığında doğrula.)
 	if cfg.ProviderHint != "" {
 		validHints := map[string]bool{
-			"anthropic":   true,
-			"openai":      true,
-			"gemini":      true,
-			"groq":        true,
-			"together":    true,
-			"perplexity":  true,
-			"mistral":     true,
-			"cohere":      true,
-			"deepseek":    true,
-			"xai":         true,
-			"ollama":      true,
-			"lmstudio":    true,
-			"azure":       true,
-			"generic":     true,
+			"anthropic":  true,
+			"openai":     true,
+			"gemini":     true,
+			"groq":       true,
+			"together":   true,
+			"perplexity": true,
+			"mistral":    true,
+			"cohere":     true,
+			"deepseek":   true,
+			"xai":        true,
+			"ollama":     true,
+			"lmstudio":   true,
+			"azure":      true,
+			"generic":    true,
 		}
 		if !validHints[strings.ToLower(cfg.ProviderHint)] {
 			return nil, fmt.Errorf(

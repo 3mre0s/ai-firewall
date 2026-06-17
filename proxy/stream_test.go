@@ -21,8 +21,9 @@ func newTestMaskerWithVault(vaultLimit int) (*masker.Masker, *vault.Vault) {
 // handles vault labels that are split across two consecutive network chunks.
 //
 // Scenario (senaryo):
-//   chunk1: "Here is the value: [[SECRET_"
-//   chunk2: "A4F0C8B2]] — use wisely."
+//
+//	chunk1: "Here is the value: [[SECRET_"
+//	chunk2: "A4F0C8B2]] — use wisely."
 //
 // The label [[SECRET_A4F0C8B2]] must be fully unmasked in the output.
 // (Etiket [[SECRET_A4F0C8B2]] çıktıda tam olarak maskelenmemiş olmalı.)
@@ -67,7 +68,8 @@ func TestStreamProcessorSplitChunk(t *testing.T) {
 // TestStreamProcessorMultipleSplits tests a chain of labels, some crossing
 // chunk boundaries, some within a single chunk.
 // (Bazıları chunk sınırlarını aşan, bazıları tek chunk içinde kalan
-//  bir etiket zincirini test eder.)
+//
+//	bir etiket zincirini test eder.)
 func TestStreamProcessorMultipleSplits(t *testing.T) {
 	t.Parallel()
 

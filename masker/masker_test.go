@@ -10,7 +10,7 @@
 //  4. SSE split-chunk test: labels split across chunk boundaries are
 //     correctly reassembled by streamProcessor
 //     (SSE bölünmüş chunk testi: chunk sınırlarında bölünen etiketler
-//      streamProcessor tarafından doğru birleştirilir)
+//     streamProcessor tarafından doğru birleştirilir)
 package masker
 
 import (
@@ -46,7 +46,8 @@ func newTestMaskerWithVault(vaultLimit int) (*Masker, *vault.Vault) {
 // TestMaskDoesNotLeakOriginal verifies that for every test case the masked
 // output does not contain the original sensitive substring.
 // (Her test senaryosu için maskeli çıktının orijinal hassas alt dizeyi
-//  içermediğini doğrular.)
+//
+//	içermediğini doğrular.)
 func TestMaskDoesNotLeakOriginal(t *testing.T) {
 	t.Parallel()
 
@@ -151,7 +152,8 @@ func TestMaskDoesNotLeakOriginal(t *testing.T) {
 // TestRoundTrip verifies that masking followed by unmasking recovers the
 // original text perfectly, character-by-character.
 // (Maskeleme ardından maskeyi kaldırmanın orijinal metni karakter karakter
-//  geri kazandırdığını doğrular.)
+//
+//	geri kazandırdığını doğrular.)
 func TestRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -220,7 +222,8 @@ func TestRoundTrip(t *testing.T) {
 // MaskedCount must be zero for skipped items.
 //
 // (Vault kapasitede olduğunda, Masker'ın hassas değeri sessizce silmek yerine
-//  metinde bıraktığını doğrular. Atlanan öğeler için MaskedCount sıfır olmalı.)
+//
+//	metinde bıraktığını doğrular. Atlanan öğeler için MaskedCount sıfır olmalı.)
 func TestVaultFullSkipsMasking(t *testing.T) {
 	t.Parallel()
 
@@ -261,7 +264,8 @@ func TestVaultFullSkipsMasking(t *testing.T) {
 // TestVaultFullPartialMask verifies that items masked before vault fills are
 // still round-trippable, and items after the fill are left in plain text.
 // (Vault dolmadan önce maskelenen öğelerin hâlâ gidiş-dönüş yapılabildiğini,
-//  dolduktan sonraki öğelerin düz metin olarak bırakıldığını doğrular.)
+//
+//	dolduktan sonraki öğelerin düz metin olarak bırakıldığını doğrular.)
 func TestVaultFullPartialMask(t *testing.T) {
 	t.Parallel()
 
@@ -627,7 +631,8 @@ func TestTCKimlikRoundTrip(t *testing.T) {
 // TestTCKimlikFalsePositiveReduction verifies that 11-digit numbers that fail the
 // checksum (order IDs, random numbers, etc.) are NOT masked.
 // (Sağlama toplamını geçemeyen 11 haneli sayıların (sipariş no, rastgele sayı vb.)
-//  maskelenmediğini doğrular — yanlış pozitif azaltma testi.)
+//
+//	maskelenmediğini doğrular — yanlış pozitif azaltma testi.)
 func TestTCKimlikFalsePositiveReduction(t *testing.T) {
 	t.Parallel()
 
@@ -671,7 +676,8 @@ func TestTCKimlikFalsePositiveReduction(t *testing.T) {
 // TestTCKimlikHasSecrets verifies HasSecrets returns true for valid TC Kimlik
 // and false for invalid-checksum numbers (fail-fast must not fire on junk IDs).
 // (HasSecrets'in geçerli TC Kimlik için true, geçersiz sağlama toplamı için
-//  false döndürdüğünü doğrular.)
+//
+//	false döndürdüğünü doğrular.)
 func TestTCKimlikHasSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -1067,7 +1073,8 @@ func TestUnmaskTextWithNoLabels(t *testing.T) {
 // TestUnmaskUnknownLabel verifies that an unknown label (not in vault) is
 // left in the text unchanged — not silently dropped.
 // (Bilinmeyen etiketin (vault'ta yok) sessizce silinmeden metinde
-//  değiştirilmeden bırakıldığını doğrular.)
+//
+//	değiştirilmeden bırakıldığını doğrular.)
 func TestUnmaskUnknownLabel(t *testing.T) {
 	t.Parallel()
 	m := newTestMasker(1000)
@@ -1081,7 +1088,8 @@ func TestUnmaskUnknownLabel(t *testing.T) {
 // multiple times in the same input, it gets masked with the EXACT SAME label
 // to save vault space and keep references consistent.
 // (Aynı hassas değerin aynı girdide birden çok kez geçmesi durumunda,
-//  vault alanından tasarruf etmek için tam olarak aynı etiketle maskelendiğini doğrular.)
+//
+//	vault alanından tasarruf etmek için tam olarak aynı etiketle maskelendiğini doğrular.)
 func TestMaskDeduplication(t *testing.T) {
 	t.Parallel()
 	m := newTestMasker(1000)
@@ -1103,7 +1111,7 @@ func TestMaskDeduplication(t *testing.T) {
 
 	// Label is 20 chars long: [[OAI_KEY_XXXXXXXX]]
 	label := result.Text[idx1 : idx1+20]
-	
+
 	// The rest of the string should contain the exact same label
 	if !strings.Contains(result.Text[idx1+20:], label) {
 		t.Errorf("expected the exact same label to be reused, output: %q", result.Text)

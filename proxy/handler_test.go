@@ -316,4 +316,3 @@ func TestServerPipelineAuthOverwritten(t *testing.T) {
 		t.Fatalf("expected proxy status 200, got %d", rr.Code)
 	}
 }
-

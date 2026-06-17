@@ -2,10 +2,11 @@
 // protocol (OpenAI uyumlu protokol konuşan tüm sağlayıcılar).
 //
 // Architecture (mimari):
-//   openAICompatProvider is the shared base struct (paylaşılan temel yapı).
-//   Each concrete provider type embeds it and optionally overrides methods.
-//   Adding a new OpenAI-compatible provider = 3 lines.
-//   (Yeni bir OpenAI uyumlu sağlayıcı eklemek = 3 satır.)
+//
+//	openAICompatProvider is the shared base struct (paylaşılan temel yapı).
+//	Each concrete provider type embeds it and optionally overrides methods.
+//	Adding a new OpenAI-compatible provider = 3 lines.
+//	(Yeni bir OpenAI uyumlu sağlayıcı eklemek = 3 satır.)
 package providers
 
 import (
@@ -18,13 +19,14 @@ import (
 // openAICompatProvider is the shared implementation for every provider
 // that accepts the OpenAI chat-completions wire format.
 // (OpenAI sohbet-tamamlama kablo formatını kabul eden her sağlayıcı için
-//  paylaşılan uygulama.)
+//
+//	paylaşılan uygulama.)
 type openAICompatProvider struct {
 	name    string // display name (görüntüleme adı)
 	pattern string // lowercase URL substring to match (eşleştirilecek küçük harfli URL alt dizisi)
 }
 
-func (p *openAICompatProvider) Name() string     { return p.name }
+func (p *openAICompatProvider) Name() string       { return p.name }
 func (p *openAICompatProvider) Protocol() Protocol { return ProtocolOpenAI }
 
 func (p *openAICompatProvider) Matches(u string) bool {
@@ -87,7 +89,7 @@ func (p *AzureOpenAIProvider) PrepareHeaders(dst http.Header, apiKey string) {
 // (Ultra-hızlı çıkarım, tamamen OpenAI uyumlu.)
 type GroqProvider struct{ openAICompatProvider }
 
-func (p *GroqProvider) Name() string    { return "Groq" }
+func (p *GroqProvider) Name() string          { return "Groq" }
 func (p *GroqProvider) Matches(u string) bool { return strings.Contains(u, "api.groq.com") }
 
 // ── TogetherAIProvider — https://api.together.xyz ────────────────────────────
@@ -105,13 +107,13 @@ func (p *TogetherAIProvider) Matches(u string) bool {
 // (Web aramalı LLM, OpenAI uyumlu.)
 type PerplexityProvider struct{ openAICompatProvider }
 
-func (p *PerplexityProvider) Name() string    { return "Perplexity" }
+func (p *PerplexityProvider) Name() string          { return "Perplexity" }
 func (p *PerplexityProvider) Matches(u string) bool { return strings.Contains(u, "perplexity.ai") }
 
 // ── MistralProvider — https://api.mistral.ai ─────────────────────────────────
 type MistralProvider struct{ openAICompatProvider }
 
-func (p *MistralProvider) Name() string    { return "Mistral AI" }
+func (p *MistralProvider) Name() string          { return "Mistral AI" }
 func (p *MistralProvider) Matches(u string) bool { return strings.Contains(u, "mistral.ai") }
 
 // ── CohereProvider — https://api.cohere.com ──────────────────────────────────
@@ -129,7 +131,7 @@ func (p *CohereProvider) Matches(u string) bool {
 // (Yüksek performanslı Çin LLM'i, OpenAI uyumlu.)
 type DeepSeekProvider struct{ openAICompatProvider }
 
-func (p *DeepSeekProvider) Name() string    { return "DeepSeek" }
+func (p *DeepSeekProvider) Name() string          { return "DeepSeek" }
 func (p *DeepSeekProvider) Matches(u string) bool { return strings.Contains(u, "deepseek.com") }
 
 // ── XAIProvider — https://api.x.ai (Grok) ────────────────────────────────────
@@ -137,7 +139,7 @@ func (p *DeepSeekProvider) Matches(u string) bool { return strings.Contains(u, "
 // (Elon Musk'ın xAI Grok modelleri, OpenAI uyumlu.)
 type XAIProvider struct{ openAICompatProvider }
 
-func (p *XAIProvider) Name() string    { return "xAI (Grok)" }
+func (p *XAIProvider) Name() string          { return "xAI (Grok)" }
 func (p *XAIProvider) Matches(u string) bool { return strings.Contains(u, "api.x.ai") }
 
 // ── Local providers (yerel sağlayıcılar) ─────────────────────────────────────
@@ -155,7 +157,8 @@ func (p *OllamaProvider) Matches(u string) bool {
 // PrepareHeaders override — Ollama accepts any string as Bearer, but some
 // builds require no auth at all. We still set it for uniformity.
 // (Ollama, Bearer olarak herhangi bir dize kabul eder; bazı yapılarda
-//  hiç kimlik doğrulaması gerekmez. Tekdüzelik için yine de ayarlıyoruz.)
+//
+//	hiç kimlik doğrulaması gerekmez. Tekdüzelik için yine de ayarlıyoruz.)
 func (p *OllamaProvider) PrepareHeaders(dst http.Header, apiKey string) {
 	if apiKey != "" && apiKey != "none" {
 		setBearer(dst, apiKey)
@@ -193,18 +196,20 @@ func (p *LMStudioProvider) PrepareHeaders(dst http.Header, apiKey string) {
 //   - UPSTREAM_URL overrides during development
 //
 // (İç/özel model sunucuları, henüz kayıtta olmayan gelecekteki sağlayıcılar,
-//  geliştirme sırasındaki UPSTREAM_URL geçersiz kılmaları.)
+//
+//	geliştirme sırasındaki UPSTREAM_URL geçersiz kılmaları.)
 type GenericProvider struct{ openAICompatProvider }
 
 func (p *GenericProvider) Name() string          { return "Generic (OpenAI-compatible)" }
-func (p *GenericProvider) Matches(_ string) bool  { return true }
-func (p *GenericProvider) Protocol() Protocol     { return ProtocolGeneric }
+func (p *GenericProvider) Matches(_ string) bool { return true }
+func (p *GenericProvider) Protocol() Protocol    { return ProtocolGeneric }
 
 // init wires the concrete types that use NewXxx constructors into the
 // exported struct vars used by Registry.  Simpler types set fields directly
 // in the Registry literal above.
 // (NewXxx yapıcılarını kullanan somut türleri, Registry tarafından kullanılan
-//  dışa aktarılan yapı değişkenlerine bağlar.)
+//
+//	dışa aktarılan yapı değişkenlerine bağlar.)
 func init() {
 	// Replace zero-value embeddings with properly named instances.
 	// (Sıfır değerli gömme yapıları düzgün adlandırılmış örneklerle değiştir.)

@@ -63,7 +63,8 @@ type Provider interface {
 // GenericProvider must be last — it matches everything.
 //
 // (Detect() bu listeyi yineler ve ilk eşleşmeyi döner.
-//  GenericProvider son olmalıdır — her şeyle eşleşir.)
+//
+//	GenericProvider son olmalıdır — her şeyle eşleşir.)
 var Registry = []Provider{
 	// Closed / proprietary protocols (kapalı / tescilli protokoller)
 	&AnthropicProvider{},
@@ -89,27 +90,28 @@ var Registry = []Provider{
 // hintMap maps PROVIDER_HINT values to concrete providers.
 // (PROVIDER_HINT değerlerini somut sağlayıcılara eşler.)
 var hintMap = map[string]Provider{
-	"anthropic":   &AnthropicProvider{},
-	"gemini":      &GeminiProvider{},
-	"azure":       &AzureOpenAIProvider{},
-	"groq":        &GroqProvider{},
-	"together":    &TogetherAIProvider{},
-	"perplexity":  &PerplexityProvider{},
-	"mistral":     &MistralProvider{},
-	"cohere":      &CohereProvider{},
-	"deepseek":    &DeepSeekProvider{},
-	"xai":    &XAIProvider{},
-	"ollama": &OllamaProvider{},
-	"lmstudio":    &LMStudioProvider{},
-	"openai":      &OpenAIProvider{},
-	"generic":     &GenericProvider{},
+	"anthropic":  &AnthropicProvider{},
+	"gemini":     &GeminiProvider{},
+	"azure":      &AzureOpenAIProvider{},
+	"groq":       &GroqProvider{},
+	"together":   &TogetherAIProvider{},
+	"perplexity": &PerplexityProvider{},
+	"mistral":    &MistralProvider{},
+	"cohere":     &CohereProvider{},
+	"deepseek":   &DeepSeekProvider{},
+	"xai":        &XAIProvider{},
+	"ollama":     &OllamaProvider{},
+	"lmstudio":   &LMStudioProvider{},
+	"openai":     &OpenAIProvider{},
+	"generic":    &GenericProvider{},
 }
 
 // Detect returns the best Provider for the given upstream base URL.
 // The URL is lowercased before matching so callers need not normalise it.
 //
 // (Verilen upstream temel URL için en uygun Provider'ı döner.
-//  URL, çağıranların normalleştirmesi gerekmeyecek şekilde küçük harfe çevrilir.)
+//
+//	URL, çağıranların normalleştirmesi gerekmeyecek şekilde küçük harfe çevrilir.)
 func Detect(upstreamBaseURL string) Provider {
 	u := strings.ToLower(upstreamBaseURL)
 	for _, p := range Registry {
@@ -125,8 +127,9 @@ func Detect(upstreamBaseURL string) Provider {
 // falls back to GenericProvider.
 //
 // (Verilen hint dizesiyle eşleşen Provider'ı döner.
-//  hint, hintMap'teki anahtarlardan biri (küçük harf) olmalıdır.
-//  Bulunamazsa GenericProvider'a döner.)
+//
+//	hint, hintMap'teki anahtarlardan biri (küçük harf) olmalıdır.
+//	Bulunamazsa GenericProvider'a döner.)
 func DetectByHint(hint string) Provider {
 	if p, ok := hintMap[strings.ToLower(hint)]; ok {
 		return p

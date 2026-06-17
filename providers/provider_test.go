@@ -236,4 +236,3 @@ func TestOpenAICompatPrepareHeaders_PassthroughAndSanitize(t *testing.T) {
 		t.Errorf("expected client api-key to be deleted, got %q", dst2.Get("api-key"))
 	}
 }
-

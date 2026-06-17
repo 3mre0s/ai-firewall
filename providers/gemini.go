@@ -24,6 +24,12 @@ func (p *GeminiProvider) Matches(u string) bool {
 func (p *GeminiProvider) Protocol() Protocol { return ProtocolGemini }
 
 func (p *GeminiProvider) PrepareHeaders(dst http.Header, apiKey string) {
+	// Passthrough mode: skip injection when FORWARD_API_KEY=none.
+	// (Geçiş modu: FORWARD_API_KEY=none olduğunda enjeksiyonu atla.)
+	if apiKey == "" || apiKey == "none" {
+		dst.Set("Content-Type", "application/json")
+		return
+	}
 	// Google recommends x-goog-api-key for simple API key auth.
 	// If an OAuth token is in use, it would start with "ya29." — in that
 	// case fall back to Authorization: Bearer.
@@ -32,8 +38,12 @@ func (p *GeminiProvider) PrepareHeaders(dst http.Header, apiKey string) {
 	//  Authorization: Bearer'a geri dönülür.)
 	if strings.HasPrefix(apiKey, "ya29.") || strings.HasPrefix(apiKey, "Bearer ") {
 		dst.Set("Authorization", "Bearer "+strings.TrimPrefix(apiKey, "Bearer "))
+		dst.Del("x-goog-api-key") // remove key-based header to avoid conflict
+		dst.Del("x-api-key")
 	} else {
 		dst.Set("x-goog-api-key", apiKey)
+		dst.Del("Authorization") // remove Bearer header to avoid conflict
+		dst.Del("x-api-key")
 	}
 	dst.Set("Content-Type", "application/json")
 }

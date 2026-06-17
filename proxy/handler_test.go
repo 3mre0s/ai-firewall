@@ -234,3 +234,86 @@ func TestServerSSRFProtection(t *testing.T) {
 		t.Errorf("expected 200 OK, got %d", rr.Code)
 	}
 }
+
+func TestServerPipelineAuthPassthrough(t *testing.T) {
+	t.Parallel()
+
+	// 1. Upstream checks that it receives the client's Authorization header,
+	// and does NOT receive x-api-key since forward API key is "none".
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer client-supplied-token" {
+			t.Errorf("upstream did not receive expected client Authorization header, got %q", auth)
+		}
+		xkey := r.Header.Get("x-api-key")
+		if xkey != "" {
+			t.Errorf("upstream received x-api-key in passthrough mode: %q", xkey)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockUpstream.Close()
+
+	// 2. Load test config and override key to "none"
+	cfg := config.LoadForTest()
+	cfg.ForwardAPIKey = "none"
+	cfg.UpstreamURL = mockUpstream.URL
+	cfg.ProviderHint = "anthropic" // force Anthropic provider to test its PrepareHeaders
+
+	v := vault.New(10)
+	m := masker.New(v, cfg)
+	srv := NewServer(cfg, m)
+
+	// 3. Make client request with Authorization header
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(`{}`))
+	req.Header.Set("Authorization", "Bearer client-supplied-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected proxy status 200, got %d", rr.Code)
+	}
+}
+
+func TestServerPipelineAuthOverwritten(t *testing.T) {
+	t.Parallel()
+
+	// 1. Upstream checks that the client's Authorization header was stripped,
+	// and the configured FORWARD_API_KEY was injected as x-api-key.
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "" {
+			t.Errorf("expected client Authorization header to be stripped, got %q", auth)
+		}
+		xkey := r.Header.Get("x-api-key")
+		if xkey != "configured-override-key" {
+			t.Errorf("expected x-api-key to be 'configured-override-key', got %q", xkey)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockUpstream.Close()
+
+	// 2. Load test config with concrete forward key
+	cfg := config.LoadForTest()
+	cfg.ForwardAPIKey = "configured-override-key"
+	cfg.UpstreamURL = mockUpstream.URL
+	cfg.ProviderHint = "anthropic"
+
+	v := vault.New(10)
+	m := masker.New(v, cfg)
+	srv := NewServer(cfg, m)
+
+	// 3. Make client request with conflicting Authorization header
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(`{}`))
+	req.Header.Set("Authorization", "Bearer client-supplied-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected proxy status 200, got %d", rr.Code)
+	}
+}
+

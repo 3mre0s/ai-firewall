@@ -1,77 +1,116 @@
-# Threat Model — Local AI Firewall
+# Threat Model
 
-This threat model outlines the trust boundaries, threat actors, and security boundaries of the Local AI Firewall. It helps security teams evaluate the product's protection scope and limitations.
+This document states plainly what Local AI Firewall protects against, what it
+does **not** protect against, and the known trade-offs in its current design.
+It is deliberately honest about limitations — knowing the edges of a security
+tool is part of using it safely.
 
-## Trust Boundaries
+## What this tool is for
 
-```
-                 ┌─────────────────────────────────────────┐
-                 │              LOCAL SYSTEM               │
-                 │                                         │
-  ┌──────────┐   │   ┌──────────────┐   ┌──────────────┐   │        WAN / INTERNET
-  │   IDE    │ ──┼─➔ │ AI Firewall  │ ➔ │  Local Vault │   │
-  │  Client  │   │   │   (:8080)    │   │ (In-Memory)  │   │
-  └──────────┘   │   └──────────────┘   └──────────────┘   │              │
-                 │          │                              │              ▼
-                 └──────────┼──────────────────────────────┘       ┌──────────────┐
-                            │                                      │  AI Upstream │
-                            └─────────────────────────────────────➔│ (OpenAI/etc.)│
-                                 Masked Text & Upstream Headers    └──────────────┘
-```
+**The core problem:** when you use an AI coding assistant or chat tool, your
+prompts are sent to a cloud provider you don't control. Those prompts often
+contain secrets you didn't mean to share — an API key pasted into a stack
+trace, a database password in a config snippet, a file path that reveals your
+username, an email address.
 
-The trust boundary lies on the **local machine boundary**:
-- **Trusted Zone**: Everything running on the local host (IDE, Client apps, AI Firewall proxy, in-memory Vault).
-- **Untrusted Zone**: The public internet, WAN, and external cloud AI APIs (OpenAI, Anthropic, Gemini, etc.).
+**What the firewall does:** it sits between your AI tool and the provider,
+detects secrets in the **request body**, replaces each with a placeholder
+before the request leaves your machine, and restores the originals in the
+response before your client sees them. The provider only ever receives
+placeholders.
 
----
+## What it protects against
 
-## 1. In-Scope Threats (What is Protected)
+- **Accidental exfiltration of secrets to an AI provider.** The primary goal.
+  Detected secrets in the request body are replaced with placeholders before
+  the request is forwarded.
+- **Leaking the token→secret mapping.** The vault that maps placeholders back to
+  originals lives only in memory. It is never written to disk and is wiped on
+  graceful shutdown.
+- **The firewall's own API key leaking.** In explicit proxy mode,
+  `FORWARD_API_KEY` is injected upstream and is never logged or written to disk.
+- **Internal state leaking to the network.** The `/metrics` and `/dashboard`
+  endpoints are bound to loopback (`127.0.0.1`, `::1`). Any non-loopback request
+  receives `403 Forbidden`, so vault occupancy and mask counts cannot leak to
+  the provider or the wider network.
 
-Local AI Firewall is designed to defend against data exposure to external endpoints.
+## What it does NOT protect against
 
-### Threat 1: Accidental PII / Secret Leakage via Prompts
-- **Attack Vector**: A developer copies and pastes log files, environment configurations, or production files into a chatbot or IDE autocomplete tool.
-- **Impact**: Corporate secrets, e-mail addresses, database passwords, or private paths are sent to cloud servers, risking compliance violations (GDPR, HIPAA) and data leaks.
-- **Mitigation**: The `Masker` automatically intercepts the request, replaces PII/secrets with random labels (`[[EMAIL_XXXXXXXX]]`), and holds the actual secrets in the local Vault. The external provider only sees the sanitised text.
+Be clear-eyed about these. The firewall is not a sandbox.
 
-### Threat 2: Credential Disclosure (API Keys / Private Keys)
-- **Attack Vector**: Source code containing hardcoded tokens (`ghp_...`, `AKIA...`) or SSH/TLS private keys is sent as context for code explanation.
-- **Impact**: Compromised credentials, unauthorized cloud access, or code repository hijacks.
-- **Mitigation**: Specific high-accuracy regex patterns automatically identify and vault API tokens and PEM blocks, ensuring they never cross the network boundary.
+- **Local malware or another user on the machine.** If an attacker is already
+  running code as your user, they can read process memory, the vault, and the
+  CA key file. This tool assumes the local machine and user account are trusted.
+- **Secrets it doesn't have a pattern for.** Detection is pattern-based.
+  A secret in a format with no matching pattern will pass through unmasked.
+  Coverage is a moving target; treat the pattern list as best-effort, not
+  exhaustive.
+- **Prompt injection or malicious model output.** The firewall does not inspect
+  prompts for injection attacks, nor does it sanitise model responses for
+  anything other than restoring its own placeholders.
+- **Secrets you send outside the proxied path.** Only traffic that actually goes
+  through the firewall is scanned. A tool that bypasses the proxy, or a host the
+  MITM proxy is not configured to intercept, is not protected.
+- **The auth header itself.** In transparent (MITM) mode the firewall
+  deliberately does **not** mask the `x-api-key` / `Authorization` header — that
+  credential must reach the provider for authentication to work. Only the
+  request body is scanned.
 
-### Threat 3: Local Environment Path Exposure
-- **Attack Vector**: Error logs containing paths like `C:\Users\john_doe\Project\db.json` are sent to the AI.
-- **Impact**: Leaking local OS usernames, directory structures, and environment configurations.
-- **Mitigation**: Windows and Unix absolute path patterns intercept paths and mask them as `[[WIN_PATH_XXXXXXXX]]` or `[[UNIX_PATH_XXXXXXXX]]`.
+## Trust boundaries
 
----
+| Boundary | Trusted? | Notes |
+|---|---|---|
+| Your machine / user account | Trusted | The whole design assumes this. |
+| The in-memory vault | Trusted, never persisted | Wiped on shutdown. |
+| The CA private key on disk | Sensitive | `0600`; encrypt with a passphrase. |
+| The upstream AI provider | **Untrusted** | Sees only masked request bodies. |
+| The network between you and the provider | Untrusted | Standard TLS to the provider. |
+| `/metrics`, `/dashboard` | Loopback only | `403` for any non-loopback client. |
 
-## 2. Out-of-Scope Threats (What is NOT Protected)
+## MITM mode specifics
 
-Understanding limitations is critical for enterprise threat modeling.
+Transparent mode works by terminating TLS locally. On first run the firewall
+generates a self-signed ECDSA P-256 CA (`CN=AI Firewall CA`). After you install
+it into your system trust store (`ai-firewall install-ca`), the firewall signs
+short-lived (24-hour) leaf certificates per host so it can read and mask the
+request body before re-encrypting to the real provider.
 
-### Threat 4: Compromised Host OS (Malware / Keyloggers)
-- **Attack Vector**: Malware or trojans running on the developer's computer.
-- **Impact**: Intercepting keys typed in the IDE, copying clipboard data, or reading configuration files before they reach the proxy.
-- **Mitigation**: Outside the firewall's scope. Organizations must enforce endpoint protection (EDR, antivirus) on dev machines.
+Implications you should understand:
 
-### Threat 5: Process Memory Dump / Admin Access
-- **Attack Vector**: A local malicious user with root/administrator access inspects the running processes or grabs a core dump (`gcore`) of the `ai-firewall` binary.
-- **Impact**: Reading the in-memory Vault contents where the original secrets are stored.
-- **Mitigation**: Admin-level local compromises cannot be mitigated by user-space applications. Implement system hardening, OS virtualization, or container isolation.
+- **The CA can sign certificates for any host on your machine while installed.**
+  That is the whole point of a locally trusted CA, and also why protecting the
+  CA private key matters. Remove it with `ai-firewall uninstall-ca` when you're
+  done.
+- **Only configured AI hosts are intercepted.** Non-AI hosts pass through as a
+  blind tunnel without TLS termination, so the firewall never sees their
+  contents. This limits exposure but also means traffic to an unrecognised AI
+  host is not scanned.
 
-### Threat 6: Upstream AI Provider Compromise
-- **Attack Vector**: The third-party AI provider's databases or systems are hacked, exposing chat history.
-- **Impact**: Attackers gain access to past prompts.
-- **Mitigation**: Since prompts sent upstream only contain masked labels (e.g., `[[SECRET_A1B2C3D4]]`), the attacker only gets sanitised text. They cannot recover the original API keys, e-mails, or paths because those values never existed on the provider's server.
+## Known limitations and trade-offs
 
----
+These are acknowledged design trade-offs, not vulnerabilities. They are tracked
+as roadmap work.
 
-## 3. Threat Mitigation Matrix
+- **CA key derivation uses a single SHA-256 hash, not a password-based KDF.**
+  When `AI_FIREWALL_CA_PASSPHRASE` is set, the AES-256-GCM key is derived from
+  the passphrase with one SHA-256 pass rather than scrypt or Argon2id. If the
+  encrypted key file is exfiltrated, this offers limited resistance to offline
+  dictionary attacks. Mitigating factors: the file is `0600`, the passphrase is
+  never written to disk, and leaf certificates are valid for only 24 hours.
+  **Roadmap:** move to Argon2id.
+- **No passphrase means the CA key is stored unencrypted.** If
+  `AI_FIREWALL_CA_PASSPHRASE` is unset, the key is written as a plain `0600` PEM
+  file and a prominent warning is logged. The cert directory gets an automatic
+  `.gitignore` to prevent accidental commits, but you should set a passphrase.
+- **Secrets split across SSE chunk boundaries may pass through unmasked.** In
+  streaming responses each chunk is processed as it arrives. A secret whose
+  bytes are split across two chunks may not be detected on the **response** path.
+  Request bodies are always processed on a complete buffer and are unaffected.
+- **Detection is best-effort and format-specific.** Patterns are tuned to real
+  secret formats to limit false positives, which means a malformed or
+  truncated-looking secret may not match. Test with realistic values.
 
-| Threat ID | Threat Vector | Risk Level | Mitigation Control |
-|---|---|---|---|
-| **T-01** | Secret leaking to Upstream AI | **Critical** | Pattern-based regex masking and Vault substitution. |
-| **T-02** | Eavesdropping on Vault storage | **High** | Vault is **in-memory only** (never written to disk). |
-| **T-03** | Residual data post-shutdown | **Medium** | Signal interceptor runs `v.Reset()` on process exit. |
-| **T-04** | Unauthorized metrics access | **Low** | Restrict `/metrics` port binding (bind to `127.0.0.1` or firewall it). |
+## Reporting
+
+If you believe any guarantee above is broken, see
+[SECURITY.md](SECURITY.md) for how to report it privately.

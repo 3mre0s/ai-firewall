@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -34,7 +35,16 @@ type Config struct {
 	// ForwardAPIKey — the real API key forwarded to the upstream provider.
 	// NEVER logged or stored on disk.
 	// (Gerçek API anahtarı; hiçbir zaman loglanmaz veya diske yazılmaz.)
-	// Required.
+	//
+	// Set to "none" to enable passthrough mode: the firewall skips key injection
+	// and forwards the client's own Authorization: Bearer header unchanged.
+	// This is used by Claude Code Pro/Max subscription users who authenticate
+	// via ANTHROPIC_AUTH_TOKEN instead of an API key.
+	// ("none" olarak ayarlandığında passthrough modu etkinleşir: firewall anahtar
+	//  enjeksiyonunu atlar ve istemcinin kendi Authorization: Bearer header'ını
+	//  değiştirmeden iletir. Claude Code Pro/Max abonelik kullanıcıları
+	//  ANTHROPIC_AUTH_TOKEN ile kimlik doğruladığında bu mod kullanılır.)
+	// Required (or "none" for passthrough mode).
 	ForwardAPIKey string
 
 	// VaultSizeLimit — max number of label→value entries held in memory per session.
@@ -58,6 +68,18 @@ type Config struct {
 	// (Ayrıntı düzeyi: "silent" sessiz | "info" bilgi | "debug" hata ayıklama)
 	// Default: info
 	LogLevel string
+
+	// MITMEnabled — whether to start the MITM proxy server.
+	// Default: false
+	MITMEnabled bool
+
+	// MITMPort — the local TCP port the MITM proxy will bind to.
+	// Default: 8082
+	MITMPort int
+
+	// MITMCertDir — directory for CA cert/key storage.
+	// Default: ~/.ai-firewall
+	MITMCertDir string
 }
 
 // Load reads every setting from the environment and returns a validated Config.
@@ -70,6 +92,12 @@ func Load() (*Config, error) {
 }
 
 func load(getenv func(string) string) (*Config, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	defaultCertDir := filepath.Join(home, ".ai-firewall")
+
 	cfg := &Config{
 		ListenPort:     envInt(getenv, "FIREWALL_PORT", 8080),
 		UpstreamURL:    envStr(getenv, "UPSTREAM_URL", "https://api.anthropic.com"),
@@ -79,17 +107,27 @@ func load(getenv func(string) string) (*Config, error) {
 		MaskPaths:      envBool(getenv, "MASK_PATHS", true),
 		MaskEmails:     envBool(getenv, "MASK_EMAILS", true),
 		LogLevel:       envStr(getenv, "LOG_LEVEL", "info"),
+		MITMEnabled:    envBool(getenv, "MITM_ENABLED", false),
+		MITMPort:       envInt(getenv, "MITM_PORT", 8082),
+		MITMCertDir:    envStr(getenv, "MITM_CERT_DIR", defaultCertDir),
 	}
 
 	// Validation (doğrulama) ────────────────────────────────────────────────
 	if cfg.ListenPort < 1 || cfg.ListenPort > 65535 {
 		return nil, fmt.Errorf(
-			"FIREWALL_PORT must be between 1 and 65535 (FIREWALL_PORT 1-65535 arasında olmalıdır), got: %d", cfg.ListenPort)
+			"FIREWALL_PORT must be between 1 and 65535, got: %d", cfg.ListenPort)
+	}
+
+	if cfg.MITMEnabled {
+		if cfg.MITMPort < 1 || cfg.MITMPort > 65535 {
+			return nil, fmt.Errorf(
+				"MITM_PORT must be between 1 and 65535, got: %d", cfg.MITMPort)
+		}
 	}
 
 	if cfg.ForwardAPIKey == "" {
 		return nil, fmt.Errorf(
-			"FORWARD_API_KEY is required but not set (FORWARD_API_KEY zorunludur, ayarlanmamış)")
+			"FORWARD_API_KEY is required but not set; use \"none\" for passthrough mode")
 	}
 
 	cfg.UpstreamURL = strings.TrimRight(cfg.UpstreamURL, "/")
@@ -108,7 +146,6 @@ func load(getenv func(string) string) (*Config, error) {
 			"cohere":      true,
 			"deepseek":    true,
 			"xai":         true,
-			"antigravity": true,
 			"ollama":      true,
 			"lmstudio":    true,
 			"azure":       true,
@@ -116,7 +153,7 @@ func load(getenv func(string) string) (*Config, error) {
 		}
 		if !validHints[strings.ToLower(cfg.ProviderHint)] {
 			return nil, fmt.Errorf(
-				"PROVIDER_HINT %q is not a recognised provider; leave empty for auto-detect (geçersiz PROVIDER_HINT; otomatik algılama için boş bırakın)",
+				"PROVIDER_HINT %q is not a recognised provider; leave empty for auto-detect",
 				cfg.ProviderHint)
 		}
 		cfg.ProviderHint = strings.ToLower(cfg.ProviderHint)
@@ -138,6 +175,9 @@ func LoadForTest() *Config {
 		MaskPaths:      true,
 		MaskEmails:     true,
 		LogLevel:       "silent",
+		MITMEnabled:    false,
+		MITMPort:       8082,
+		MITMCertDir:    ".ai-firewall-test",
 	}
 }
 

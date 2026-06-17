@@ -13,6 +13,7 @@ mkdir -p "$dist"
 
 targets=(
   "linux   amd64 ai-firewall-linux-amd64"
+  "linux   arm64 ai-firewall-linux-arm64"
   "darwin  amd64 ai-firewall-darwin-amd64"
   "darwin  arm64 ai-firewall-darwin-arm64"
   "windows amd64 ai-firewall-windows-amd64.exe"

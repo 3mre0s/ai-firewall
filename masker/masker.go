@@ -130,6 +130,9 @@ func (m *Masker) Mask(text string) MaskResult {
 // (Tüm regex eşleşmesini tek bir etiketle değiştirir.)
 func (m *Masker) maskFull(text string, p patterns.SensitivePattern, r *MaskResult, seen map[string]string) string {
 	return p.Regex.ReplaceAllStringFunc(text, func(match string) string {
+		if p.Validate != nil && !p.Validate(match) {
+			return match // failed checksum / semantic validation — leave as-is
+		}
 		if existingLabel, ok := seen[match]; ok {
 			r.MaskedCount++
 			r.ByType[p.Type]++
@@ -165,6 +168,9 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 
 		value := subs[p.GroupIndex]
 
+		if p.Validate != nil && !p.Validate(value) {
+			return match // failed checksum / semantic validation — leave as-is
+		}
 		if existingLabel, ok := seen[value]; ok {
 			r.MaskedCount++
 			r.ByType[p.Type]++
@@ -189,6 +195,48 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 		//  Regex, değerin eşleşme içinde olduğunu zaten garanti eder; bu nedenle güvenlidir.)
 		return strings.Replace(match, value, label, 1)
 	})
+}
+
+// ── HasSecrets (Sır Tespiti) ──────────────────────────────────────────────────
+
+// HasSecrets reports whether text contains any sensitive-data pattern that would
+// be masked by Mask().  Unlike Mask, this is a pure read — it does not modify the
+// Vault or any other state.  Used by the streaming fail-fast mechanism.
+//
+// (Mask() tarafından maskelenecek hassas veri desenleri içeriyorsa true döner.
+//
+//	Mask'ın aksine Vault'u veya herhangi bir durumu değiştirmez — salt okunur
+//	bir kontrol. Akış fail-fast mekanizması tarafından kullanılır.)
+func (m *Masker) HasSecrets(text string) bool {
+	for _, p := range patterns.Registry {
+		if p.Type == patterns.TypePath && !m.cfg.MaskPaths {
+			continue
+		}
+		if p.Type == patterns.TypePII && !m.cfg.MaskEmails {
+			continue
+		}
+		if p.Validate == nil {
+			if p.Regex.MatchString(text) {
+				return true
+			}
+			continue
+		}
+		// Pattern has a semantic validator — check each match individually.
+		if p.GroupIndex > 0 {
+			for _, subs := range p.Regex.FindAllStringSubmatch(text, -1) {
+				if len(subs) > p.GroupIndex && p.Validate(subs[p.GroupIndex]) {
+					return true
+				}
+			}
+		} else {
+			for _, match := range p.Regex.FindAllString(text, -1) {
+				if p.Validate(match) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // ── Unmask (Maskeyi Kaldırma) ─────────────────────────────────────────────────

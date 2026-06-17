@@ -1,35 +1,65 @@
-# Security Policy — Local AI Firewall
+# Security Policy
 
-We take the security of your sensitive data, API credentials, and development environments seriously. Because Local AI Firewall acts as a security gateway between your systems and public cloud APIs, this document defines our security posture, vulnerability reporting procedures, and architectural guarantees.
+Local AI Firewall is a security tool, so we take reports about its own
+weaknesses seriously. This document explains what is in scope, how to report
+an issue, and what to expect in return.
 
-## Supported Versions
+## Reporting a vulnerability
 
-Only the latest release receives security patches. Since the firewall is distributed as a lightweight, single-binary application, we request all users to immediately update to the latest tag if a vulnerability is patched.
+**Please do not open a public GitHub issue for security vulnerabilities.**
 
-| Version | Supported |
-| --- | --- |
-| v1.x | :white_check_mark: Yes |
-| < v1.0 | :x: No |
+Instead, report privately through one of:
 
-## Reporting a Vulnerability
+- GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
+  (the **Security** tab → *Report a vulnerability*), or
+- email to `<security-contact>` (replace with your address before publishing).
 
-**Please do not open public GitHub issues for security vulnerabilities.**
+When reporting, please include:
 
-If you discover a security vulnerability (such as a pattern bypass, memory leak, or authorization issue), report it confidentially:
+- a description of the issue and the impact you believe it has,
+- the version or commit you tested against,
+- step-by-step reproduction instructions, and
+- any proof-of-concept code or sample payloads, if applicable.
 
-1. **Email**: Send a detailed report to `security@localai-firewall.internal` (replace with your organization's security contact if deployed internally).
-2. **Encrypted Communications**: If your report contains sensitive reproduction steps, request our PGP key before sending.
-3. **Response Timeline**:
-   - **Acknowledgment**: Within 24 hours.
-   - **Triage & Mitigation**: Within 3 business days.
-   - **Fix & Coordinated Disclosure**: Within 7 business days.
+You will receive an acknowledgement of your report. We aim to respond with an
+initial assessment, agree on a disclosure timeline with you, and credit you in
+the release notes if you wish (and if the report leads to a fix).
 
-## Architectural Security Guarantees
+We ask that you give us reasonable time to investigate and ship a fix before
+any public disclosure.
 
-Local AI Firewall provides the following structural guarantees by design:
+## Scope
 
-*   **Zero-Disk Footprint**: The central `Vault` (kasası) resides **exclusively in-memory**. At no point are masked text values, original secrets, or mapping labels written to persistent storage (SSD/HDD) or swap space (where preventable).
-*   **Zero-Leak Logging**: Under no `LOG_LEVEL` (including `debug`) will the `FORWARD_API_KEY` or raw request/response text payloads be written to `stdout`, `stderr`, or system logs.
-*   **Graceful Memory Wipe**: On receiving OS signals (`SIGINT` / `SIGTERM`), the startup loop intercepts the shutdown and calls `v.Reset()`. This explicitly clears the internal Go map references and forces garbage collection, leaving no sensitive buffers in memory before process exit.
-*   **Cryptographically Random Placeholders**: The generated labels use hex-encoded hashes of the salt, timestamp, and value, ensuring that placeholders cannot be used upstream to brute-force or infer the shape of the original secrets.
-*   **Single-Purpose Scope**: The binary contains no dependencies outside the Go standard library (other than internal package wiring), drastically minimizing the supply-chain attack surface.
+In scope — issues in this repository that could:
+
+- cause a secret to be sent upstream **unmasked** when it should have been caught,
+- expose the in-memory vault contents to the network or to the upstream provider,
+- leak the CA private key, or weaken its at-rest protection,
+- allow a non-loopback client to reach `/metrics` or `/dashboard`,
+- allow the MITM proxy to be abused to intercept traffic it should not, or
+- any other flaw that breaks the guarantees described in
+  [THREAT_MODEL.md](THREAT_MODEL.md).
+
+Out of scope:
+
+- the **known limitations** already documented in
+  [THREAT_MODEL.md](THREAT_MODEL.md) (e.g. the SHA-256 key-derivation trade-off,
+  or secrets split across SSE chunk boundaries) — these are acknowledged, and
+  hardening them is tracked as ordinary roadmap work rather than as
+  vulnerabilities,
+- attacks that require an adversary already running code as your user on the
+  same machine (this tool does not claim to defend against local malware),
+- detection-coverage gaps (a pattern that does not yet exist for some secret
+  format) — these are welcome as **feature requests**, not security reports,
+  unless the gap silently undermines a documented guarantee.
+
+## Supported versions
+
+Security fixes target the latest stable release. There is no long-term-support
+branch yet; please track the latest release.
+
+## Disclosure philosophy
+
+We prefer coordinated disclosure. Once a fix is available, we will publish a
+security advisory describing the issue, the affected versions, and the fix,
+crediting the reporter unless they prefer to remain anonymous.

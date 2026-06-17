@@ -1,455 +1,320 @@
-# 🔥 Local AI Firewall
+# Local AI Firewall
 
-[![Go](https://img.shields.io/badge/go-1.22-blue)](#)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#-running-tests)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Security](https://img.shields.io/badge/security-zero--trust-red)](SECURITY.md)
+**Your secrets never leave your machine when you use AI coding tools.** A local proxy that strips API keys, passwords, and personal data out of your prompts before they reach Claude, OpenAI, Gemini, or any other provider — and restores them in the responses. No cloud, no account, no telemetry.
 
-A transparent, zero-trust **reverse proxy** that sits between your IDE / application and any AI API. It **masks** sensitive data before it ever reaches the cloud and **unmasks** the response on the way back — all without modifying a single line of your application code.
-
-## 📚 Documentation Index
-
-To support enterprise compliance and technical reviews, the following resources are available:
-- **[SECURITY.md](SECURITY.md)**: Security Support Policy and vulnerability disclosure reporting guide.
-- **[THREAT_MODEL.md](THREAT_MODEL.md)**: Trust boundaries, in-scope threat matrix, and out-of-scope security mitigations.
-- **[ARCHITECTURE.md](ARCHITECTURE.md)**: Component diagrams, sequence flow charts, and SSE streaming processor design.
-- **[DEPLOYMENT.md](DEPLOYMENT.md)**: Dockerfile configurations, Kubernetes sidecar architecture, and health checks.
-
-```
-Your App  →  [AI Firewall :8080]  →  Anthropic / OpenAI / Gemini / Groq / …
-                    ↑
-        Masks secrets BEFORE forwarding
-        Unmasks labels AFTER receiving
-```
+[![Go](https://img.shields.io/badge/go-1.22+-blue)](#build-from-source)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#running-tests)
 
 ---
 
-## ✨ Features
-
-| Feature | Detail |
-|---|---|
-| **Multi-provider** | Anthropic, OpenAI, Gemini, Groq, Together, Mistral, Perplexity, DeepSeek, xAI/Grok, Cohere, Azure OpenAI, Ollama, LM Studio, Antigravity |
-| **Pattern coverage** | GitHub/GitLab tokens, AWS keys, Bearer tokens, PEM private keys, passwords, API keys, env-var secrets, Unix/Windows paths, e-mail addresses |
-| **Streaming** | SSE chunk-safe unmasking — labels split across network packets are correctly reassembled |
-| **Observability** | `/metrics` JSON endpoint — vault fill %, masked item counts, error rates, uptime |
-| **Zero config** | Single binary + env vars. No config files, no databases. |
-| **Thread-safe** | sync.RWMutex vault + atomic counters — safe under concurrent load |
+|                             | Local AI Firewall  | Typical cloud gateway (Lakera, Nightfall, Portkey…)         |
+|-----------------------------|--------------------|--------------------------------------------------------------|
+| Sends your data off-machine | No                 | Yes — prompts pass through their servers                     |
+| Install                     | Single binary, no account | Sign up, configure API keys, often SDK integration    |
+| Cost                        | Free, AGPL-3.0     | Usage-based pricing                                          |
+| Works offline-first         | Yes                | No — depends on their service being up                       |
 
 ---
 
-## 📦 Installation
+![demo](docs/demo.gif)
+*Demo: `ai-firewall` intercepting a request, masking secrets, and restoring them in the response.*
 
-### Option 1: Download Pre-built Binary (Recommended)
+## Quickstart (3 steps)
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/localai/firewall/releases/latest):
+**1. Install binary**
 
-| Platform | Binary | Installation |
-|---|---|---|
-| **Windows x64** | `ai-firewall-windows-amd64.exe` | Rename to `ai-firewall.exe`, place in `%LOCALAPPDATA%\local-ai-firewall\` |
-| **macOS Apple Silicon** | `ai-firewall-darwin-arm64` | Rename to `ai-firewall`, place in `~/Library/Application Support/local-ai-firewall/` or `/opt/homebrew/bin` |
-| **macOS Intel** | `ai-firewall-darwin-amd64` | Rename to `ai-firewall`, place in `~/Library/Application Support/local-ai-firewall/` or `/usr/local/bin` |
-| **Linux x64** | `ai-firewall-linux-amd64` | Rename to `ai-firewall`, place in `~/.local/bin/` or `/usr/local/bin` |
-
-**Verify the checksum** (recommended):
 ```bash
-sha256sum ai-firewall-linux-amd64
-# Compare with checksums.txt from the same release
+# macOS
+brew install torpilsiz/ai-firewall/ai-firewall
+
+# Windows
+scoop bucket add ai-firewall https://github.com/torpilsiz/scoop-bucket
+scoop install ai-firewall
+
+# Linux / manual
+curl -L https://github.com/torpilsiz/Ai-Firewall/releases/latest/download/ai-firewall-linux-amd64.tar.gz | tar xz
+mv ai-firewall ~/.local/bin/
 ```
 
-**macOS/Linux: Make executable:**
+**2. Install VS Code extension**
+
+Download `local-ai-firewall.vsix` from the [latest release](../../releases/latest), then:
+
 ```bash
-chmod +x ~/.local/bin/ai-firewall
+code --install-extension local-ai-firewall.vsix
 ```
 
-### Option 2: Build from Source
+**3. Start**
 
-**Prerequisites:**
-- [Go 1.22+](https://go.dev/dl/)
-
-**Build:**
-```bash
-git clone https://github.com/localai/firewall
-cd firewall
-go build -o ai-firewall .
-```
+- `Ctrl+Shift+P` → **Local AI Firewall: Set API Key**
+- `Ctrl+Shift+P` → **Local AI Firewall: Start**
+- `Ctrl+Shift+P` → **Local AI Firewall: Copy Agent Env** → paste in terminal
+- Run `claude`, `cursor`, or any AI coding tool
 
 ---
 
-## 🚀 Quick Start
+## What makes it different
 
-### 1. Prerequisites
+Most secret-redaction tools ask you to reconfigure each client — change a base URL, run a Docker container, route through a hosted gateway. This one is built to disappear:
 
-- An API key for your AI provider (Anthropic, OpenAI, Gemini, Groq, etc.)
-- The `ai-firewall` binary (from Installation above)
+- **Zero configuration** — transparent MITM mode intercepts HTTPS directly. Install the local CA once with a single command, and every AI tool on your machine is protected without touching its settings.
+- **Zero telemetry** — nothing phones home. No account, no cloud component, no usage tracking. The metrics dashboard is bound to localhost and refuses any non-loopback request.
+- **Single static binary** — no runtime, no dependencies, no container. Download one file and run it. Cross-compiled for Linux, macOS, and Windows.
+- **Secrets stay in memory** — the token-to-secret mapping lives in an in-memory vault that is never written to disk and is wiped on shutdown.
 
-### 2. Build (skip if you downloaded pre-built binary)
-
-```bash
-git clone https://github.com/localai/firewall
-cd firewall
-go build -o ai-firewall .
-```
-
-### 3. Configure
-
-Copy `.env.example` to `.env` and fill in your values:
-
-```bash
-cp .env.example .env
-# Edit .env with your editor
-```
-
-### 4. Run
-
-```bash
-# Load env vars and start the proxy
-# On Linux/macOS:
-export $(cat .env | xargs) && ./ai-firewall
-
-# On Windows PowerShell:
-Get-Content .env | ForEach-Object { $k,$v = $_ -split '=',2; [System.Environment]::SetEnvironmentVariable($k,$v) }
-.\ai-firewall.exe
-```
-
-The firewall starts on `http://localhost:8080` (or your configured port).
-
-### 5. Point your client at the firewall
-
-```bash
-# Before (direct to Anthropic):
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-
-# After (through the firewall):
-ANTHROPIC_BASE_URL=http://localhost:8080
-```
-
-The firewall injects your real `FORWARD_API_KEY` — your client sends **any** placeholder or no key at all.
+If you prefer explicit control over transparent interception, an environment-variable proxy mode is available too — see [Quick start](#quick-start).
 
 ---
 
-## ⚙️ Configuration Reference
+## Why this exists
 
-All settings are read from **environment variables**. No `.env` file format is enforced; any mechanism that sets env vars works (Docker `--env`, Kubernetes secrets, direnv, etc.).
+Every time you paste a stack trace, a config file, or a code snippet into Claude Code, Copilot, Cursor, or ChatGPT, there's a real chance it carries something you didn't mean to share: an API key, a database password, a file path that leaks your username, an email address. That data goes to a server you don't control.
+
+Local AI Firewall sits between your AI tool and the provider. It scans each outgoing request, replaces every detected secret with a short placeholder like `[[OAI_KEY_A1B2C3D4]]`, and forwards the sanitised text. When the response comes back, it swaps the placeholders for the originals before your client sees them. The model gets enough context to stay useful; your secrets stay on your machine.
+
+```
+  Your machine
+  ┌─────────────────────────────────────────────────────────┐
+  │                                                         │
+  │  AI tool          Local AI Firewall      AI provider   │
+  │  (Claude Code,  ──► [scan & mask] ──────► (Anthropic,  │
+  │   Copilot,           replace secrets      OpenAI, …)   │
+  │   Cursor …)     ◄─ [restore vault] ◄─────              │
+  │                       swap tokens back                  │
+  └─────────────────────────────────────────────────────────┘
+```
+
+Secrets are masked on the way out and restored on the way back. The provider only ever sees placeholders.
+
+---
+
+## Quick start
+
+### 1. Get the binary
+
+**macOS / Linux (Homebrew):**
+
+```bash
+brew install torpilsiz/ai-firewall/ai-firewall
+```
+
+**Windows (Scoop):**
+
+```powershell
+scoop bucket add ai-firewall https://github.com/torpilsiz/scoop-bucket
+scoop install ai-firewall
+```
+
+**Manual download:** grab the archive for your platform from the [Releases](../../releases) page, extract it, and put `ai-firewall` on your `PATH`.
+
+```bash
+# Linux / macOS example
+tar -xzf ai-firewall-linux-amd64.tar.gz
+chmod +x ai-firewall
+mv ai-firewall ~/.local/bin/
+```
+
+Verify the download against `checksums.txt` from the same release before running.
+
+### 2a. Transparent mode (recommended — zero client config)
+
+Install the local CA into your system trust store once, then start the firewall in MITM mode. No AI tool needs to be reconfigured.
+
+```bash
+# Install the CA (needs sudo on macOS/Linux, Administrator on Windows)
+ai-firewall install-ca
+
+# Protect the CA key with a passphrase, then start in transparent mode
+export AI_FIREWALL_CA_PASSPHRASE="pick-a-strong-passphrase"
+export FORWARD_API_KEY="sk-ant-..."   # your real provider key, or "none" for passthrough
+export MITM_ENABLED=true
+ai-firewall
+```
+
+Point your system or application HTTP proxy at `http://localhost:8082` and you're protected. To remove the CA later: `ai-firewall uninstall-ca`.
+
+In transparent mode your AI tool sends its own credentials as usual — the firewall does **not** touch the `x-api-key` or `Authorization` header, so authentication keeps working exactly as before. The firewall only scans and masks the **request body**; your auth key passes through untouched. (This differs from explicit proxy mode below, where the firewall injects `FORWARD_API_KEY` upstream on your behalf.)
+
+> **Note on the CA passphrase:** if you skip `AI_FIREWALL_CA_PASSPHRASE`, the CA private key is written to disk unencrypted (mode `0600`). That key can sign certificates for any domain on this machine, so setting a passphrase is strongly recommended. The cert directory gets an automatic `.gitignore` to prevent accidental commits.
+
+### 2b. Explicit proxy mode (if you prefer env-var control)
+
+Point your tool's base URL at the firewall instead of intercepting traffic.
+
+```bash
+export FORWARD_API_KEY="sk-ant-..."   # real key, injected upstream
+ai-firewall                            # defaults to api.anthropic.com on :8080
+```
+
+Then in your AI tool:
+
+```bash
+# Claude Code
+export ANTHROPIC_BASE_URL="http://localhost:8080"
+claude
+
+# OpenAI-compatible tools
+export OPENAI_BASE_URL="http://localhost:8080"
+```
+
+The firewall injects the real `FORWARD_API_KEY` upstream, so your client can send any placeholder key or none at all. To target a different provider, set `UPSTREAM_URL` (e.g. `https://api.openai.com`).
+
+Use `FORWARD_API_KEY=none` if you authenticate with a subscription token (Claude Code Pro/Max uses `ANTHROPIC_AUTH_TOKEN`); the firewall forwards the client's own `Authorization` header unchanged.
+
+---
+
+## What it detects
+
+**28 detection patterns**, covering:
+
+- **API keys & tokens** — Anthropic, OpenAI, Google, GitHub, GitLab, AWS, Stripe, Slack, JWTs, Bearer tokens, PEM private keys
+- **Inline credentials** — password assignments, shell `export` secrets
+- **System paths** — Unix and Windows filesystem paths that can leak your username
+- **Personal data** — email addresses, credit card numbers, IBANs
+- **National IDs (checksum-validated)** — Turkish TC Kimlik, Brazilian CPF (mod-11), Spanish DNI (mod-23), Indian Aadhaar (Verhoeff), Italian Codice Fiscale
+
+**14 provider adapters** — Anthropic, OpenAI, Gemini, Azure OpenAI, Groq, Together AI, Perplexity, Mistral, Cohere, DeepSeek, xAI, Ollama, LM Studio, and a generic OpenAI-compatible catch-all.
+
+**IDE extensions** — start, stop, and manage the firewall from VS Code / Cursor (stable) or JetBrains IDEs (beta). The extension auto-discovers the binary and sets the proxy URL for you.
+
+---
+
+## How it works
+
+**Request path**
+
+1. Your AI tool sends a prompt to the firewall.
+2. The firewall scans the request body against all patterns and replaces each match with a deterministic token (e.g. `[[GH_PAT_3F9A1C2E]]`).
+3. The token→secret mapping is stored in an in-memory vault — never on disk.
+4. The sanitised request is forwarded to the real provider with your API key injected.
+
+**Response path**
+
+5. The provider's response arrives (buffered or SSE streaming).
+6. The firewall scans for any tokens it placed and substitutes the originals back in.
+7. The restored response is returned to the client.
+
+---
+
+## Configuration
+
+All settings come from environment variables. No config file is needed or supported.
 
 | Variable | Default | Description |
 |---|---|---|
-| `FORWARD_API_KEY` | *(required)* | Real API key forwarded to the upstream provider. Never logged. |
-| `UPSTREAM_URL` | `https://api.anthropic.com` | Base URL of the upstream AI provider. |
-| `PROVIDER_HINT` | *(auto-detect)* | Force a specific provider. Leave empty for URL-based auto-detection. See [Providers](#-supported-providers). |
-| `FIREWALL_PORT` | `8080` | Local TCP port the proxy listens on. |
-| `VAULT_SIZE_LIMIT` | `1000` | Max masked values held in memory per process lifetime. |
-| `MASK_PATHS` | `true` | Detect and mask Unix/Windows file-system paths. |
-| `MASK_EMAILS` | `true` | Detect and mask e-mail addresses (PII). |
-| `LOG_LEVEL` | `info` | Verbosity: `silent` \| `info` \| `debug` |
+| `FORWARD_API_KEY` | *(required)* | Real API key forwarded to the upstream provider. Never logged or stored on disk. Set to `"none"` for passthrough mode: the firewall forwards the client's own `Authorization: Bearer` header unchanged. |
+| `UPSTREAM_URL` | `https://api.anthropic.com` | Base URL of the upstream AI provider. Trailing slash is stripped automatically. |
+| `FIREWALL_PORT` | `8080` | TCP port the API proxy listens on. |
+| `PROVIDER_HINT` | *(auto-detect)* | Force a specific provider adapter instead of detecting from `UPSTREAM_URL`. Valid values: `anthropic`, `openai`, `gemini`, `groq`, `together`, `perplexity`, `mistral`, `cohere`, `deepseek`, `xai`, `ollama`, `lmstudio`, `azure`, `generic`. |
+| `VAULT_SIZE_LIMIT` | `1000` | Maximum number of token→secret entries held in memory. Once reached, the request is rejected with 507 Insufficient Storage to prevent silent data leakage. Increase the limit or restart the proxy to clear the vault. |
+| `MASK_PATHS` | `true` | Detect and mask Unix and Windows filesystem paths. |
+| `MASK_EMAILS` | `true` | Detect and mask email addresses (PII). |
+| `LOG_LEVEL` | `info` | Verbosity: `silent` \| `info` \| `debug`. |
+| `MITM_ENABLED` | `false` | Start the transparent MITM proxy server in addition to the API proxy. |
+| `MITM_PORT` | `8082` | TCP port the MITM proxy listens on. |
+| `MITM_CERT_DIR` | `~/.ai-firewall` | Directory where `ca.crt` and `ca.key` are stored. Created with `0700` permissions if absent. |
+| `AI_FIREWALL_CA_PASSPHRASE` | *(unset)* | Passphrase used to encrypt the CA private key with AES-256-GCM. If unset, the key is stored as a plain `0600` PEM file and a warning is logged at startup. |
 
 ---
 
-## 📄 .env.example
+## CLI commands
 
-```dotenv
-# ─── Required ───────────────────────────────────────────────────────────────
-# Your real API key. This is NEVER sent to your client or logged anywhere.
-FORWARD_API_KEY=sk-ant-api03-REPLACE_WITH_YOUR_KEY
-
-# ─── Upstream target ────────────────────────────────────────────────────────
-# Anthropic (default)
-UPSTREAM_URL=https://api.anthropic.com
-
-# OpenAI — uncomment to switch:
-# UPSTREAM_URL=https://api.openai.com
-# FORWARD_API_KEY=sk-REPLACE_WITH_OPENAI_KEY
-
-# Google Gemini — uncomment to switch:
-# UPSTREAM_URL=https://generativelanguage.googleapis.com
-# FORWARD_API_KEY=AIza-REPLACE_WITH_GEMINI_KEY
-
-# Groq — uncomment to switch:
-# UPSTREAM_URL=https://api.groq.com
-# FORWARD_API_KEY=gsk_REPLACE_WITH_GROQ_KEY
-
-# Ollama (local, no auth needed):
-# UPSTREAM_URL=http://localhost:11434
-# FORWARD_API_KEY=none
-
-# ─── Provider hint (optional) ────────────────────────────────────────────────
-# Leave empty for auto-detection from UPSTREAM_URL.
-# Set explicitly if auto-detect is wrong (rare).
-# Values: anthropic | openai | gemini | groq | together | mistral |
-#         perplexity | cohere | deepseek | xai | azure | ollama |
-#         lmstudio | antigravity | generic
-PROVIDER_HINT=
-
-# ─── Proxy settings ─────────────────────────────────────────────────────────
-FIREWALL_PORT=8080
-VAULT_SIZE_LIMIT=1000
-
-# ─── Data categories to mask ────────────────────────────────────────────────
-MASK_PATHS=true
-MASK_EMAILS=true
-
-# ─── Logging ────────────────────────────────────────────────────────────────
-# silent | info | debug
-LOG_LEVEL=info
+```
+ai-firewall                Start the proxy server (reads config from env vars).
+ai-firewall install-ca     Install the MITM CA certificate into the system trust store.
+ai-firewall uninstall-ca   Remove the MITM CA certificate from the system trust store.
+ai-firewall version        Print the build version.
+ai-firewall help           Show usage.
 ```
 
-**Client-side setup** — point your AI SDK at the firewall:
+`install-ca` and `uninstall-ca` are idempotent — running them twice is safe and reports the current state.
+
+---
+
+## Security notes
+
+> For the full picture, see **[THREAT_MODEL.md](THREAT_MODEL.md)** (what this tool does and does not protect against) and **[SECURITY.md](SECURITY.md)** (how to report a vulnerability).
+
+### Threat model in brief
+
+This tool protects against **accidentally sending secrets to an AI provider**. It is not a sandbox and does not protect against malware already running as your user. Secrets are masked on a complete request buffer; the in-memory vault is never persisted.
+
+### CA private key protection
+
+When MITM mode is enabled, a self-signed ECDSA P-256 CA (`CN=AI Firewall CA`) is generated and persisted to `MITM_CERT_DIR`. The public certificate (`ca.crt`) is world-readable because clients need it; the private key (`ca.key`) is written `0600` (owner-read only), and the directory gets a `.gitignore` to block accidental commits.
+
+Set `AI_FIREWALL_CA_PASSPHRASE` before first run so the key is stored AES-256-GCM encrypted. If the file is read back later, the same passphrase must be present in the environment.
+
+**Known trade-off:** the AES key is currently derived from the passphrase via a single SHA-256 hash rather than a password-based KDF (scrypt, Argon2id). This offers limited resistance to offline dictionary attacks if the encrypted key is exfiltrated. Mitigating factors: the file is `0600`, the passphrase is never written to disk, and the CA only signs leaf certificates valid for 24 hours. Hardening the derivation to Argon2id is on the roadmap.
+
+### Streaming responses
+
+In SSE streaming mode each chunk is processed as it arrives. A secret whose bytes are split across a chunk boundary may pass through the response unmasked. This is inherent to chunk-by-chunk processing and applies only to the response path — secrets in the request body are always processed on a complete buffer.
+
+### Metrics and dashboard
+
+`/metrics` and `/dashboard` are restricted to `127.0.0.1` and `::1`. Any request from a non-loopback address receives `403 Forbidden`, preventing internal vault state from leaking to the upstream provider or external networks.
+
+### Vault lifecycle
+
+The in-memory vault is cleared on graceful shutdown (`SIGINT` / `SIGTERM`). In-flight requests are allowed to complete before the wipe, preventing a race between active unmask operations and the reset.
+
+---
+
+## Build from source
+
+Requires Go 1.22 or later.
 
 ```bash
-# Anthropic SDK (Python/Node/etc.)
-ANTHROPIC_BASE_URL=http://localhost:8080
-ANTHROPIC_API_KEY=any-placeholder   # the firewall replaces this
+git clone https://github.com/torpilsiz/Ai-Firewall.git
+cd Ai-Firewall
+go build -o ai-firewall .
+```
 
-# OpenAI SDK
-OPENAI_BASE_URL=http://localhost:8080
-OPENAI_API_KEY=any-placeholder
+---
+
+## Running tests
+
+```bash
+go test ./...
+go vet ./...
+```
+
+**Benchmarks:**
+
+```bash
+go test -bench=. -benchmem ./...
+# BenchmarkStreamProcessing_ZeroAlloc: ~29 µs/op · 209 B/op · 4 allocs/op
 ```
 
 ---
 
 ## IDE Extensions
 
-Developer-agent users can run the firewall as a one-click local sidecar from their IDE.
-
 | IDE | Location | Status |
 |---|---|---|
-| VS Code / Cursor-compatible | `extensions/vscode` | Stable release: start, stop, restart, metrics, copy env, SecretStorage API key |
-| JetBrains IDEs | `extensions/jetbrains` | Private beta scaffold: Tools menu actions, process manager, metrics, copy env |
+| VS Code / Cursor | `extensions/vscode` | Stable |
+| JetBrains IDEs | `extensions/jetbrains` | Beta |
 
-Both extensions auto-discover the `ai-firewall` binary in:
+Both extensions auto-discover the `ai-firewall` binary from the workspace root, OS-standard install directories, and `PATH`. See each extension's own README for setup.
 
-- the current workspace / project root,
-- the OS-standard install dir (`%LOCALAPPDATA%\local-ai-firewall`, `~/Library/Application Support/local-ai-firewall`, `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`),
-- anything on `PATH`.
+---
 
-Override with `localAiFirewall.binaryPath` (VS Code) or `AI_FIREWALL_BINARY` (JetBrains).
+## Contributing
 
-### VS Code
+Contributions are welcome. Please open an issue before starting a large change.
+
+- **New detection pattern** — add a `SensitivePattern` entry in `patterns/patterns.go` and cover it in `masker/masker_test.go`.
+- **New provider** — implement the `Provider` interface (or embed `openAICompatProvider`) in `providers/`, register it in `providers/provider.go`, and add it to `hintMap`.
 
 ```bash
-go build -o ai-firewall .
-code extensions/vscode
-```
-
-Press `F5`, then run:
-
-- `Local AI Firewall: Set API Key`
-- `Local AI Firewall: Start`
-- `Local AI Firewall: Copy Agent Env`
-
-Or install the packaged VSIX directly (no Marketplace needed):
-
-```bash
-cd extensions/vscode && npm install && npm run package
-code --install-extension local-ai-firewall.vsix
-```
-
-### JetBrains
-
-```bash
-go build -o ai-firewall .
-cd extensions/jetbrains
-./gradlew runIde
-```
-
-Set `FORWARD_API_KEY` before launching the IDE, or set `AI_FIREWALL_BINARY` if the binary is not in one of the auto-discovered locations.
-
----
-
-## 🧪 Private Beta
-
-Pre-release builds for Windows, macOS (Apple Silicon + Intel), and Linux are published to GitHub Releases. See **[BETA.md](BETA.md)** for the full onboarding flow: requesting an invite, installing the binary in the OS-standard path, installing the VSIX or JetBrains plugin, and submitting feedback.
-
-Live smoke test against a real provider (manual, not run in CI to avoid leaking keys):
-
-```bash
-# macOS / Linux
-FORWARD_API_KEY=sk-... scripts/e2e-live.sh anthropic
-FORWARD_API_KEY=sk-... scripts/e2e-live.sh openai
-
-# Windows
-$env:FORWARD_API_KEY = "sk-..."; pwsh scripts/e2e-live.ps1 anthropic
+go test ./...   # must pass
+go vet ./...    # must report nothing
 ```
 
 ---
 
-## 📡 Supported Providers
+## License
 
-| `PROVIDER_HINT` | Auto-detected from URL | Notes |
-|---|---|---|
-| `anthropic` | `anthropic.com` | x-api-key + anthropic-version headers |
-| `openai` | `api.openai.com` | Authorization: Bearer + org header |
-| `gemini` | `generativelanguage.googleapis.com`, `aiplatform.googleapis.com` | x-goog-api-key or OAuth2 Bearer |
-| `azure` | `openai.azure.com` | api-key header (Azure-specific) |
-| `groq` | `api.groq.com` | OpenAI-compatible, ultra-fast |
-| `together` | `together.xyz`, `together.ai` | OpenAI-compatible open-source models |
-| `perplexity` | `perplexity.ai` | Web-search augmented LLM |
-| `mistral` | `mistral.ai` | OpenAI-compatible |
-| `cohere` | `cohere.com`, `cohere.ai` | OpenAI-compatible v2 endpoint |
-| `deepseek` | `deepseek.com` | OpenAI-compatible |
-| `xai` | `api.x.ai` | Grok models |
-| `antigravity` | `antigravity` | Antigravity inference API |
-| `ollama` | `:11434`, `ollama` | Local; auth optional |
-| `lmstudio` | `:1234`, `lmstudio` | Local; Content-Type only |
-| `generic` | *(catch-all)* | Any OpenAI-compatible endpoint not listed above |
-
----
-
-## 📊 Metrics Endpoint
-
-`GET http://localhost:8080/metrics`
-
-Returns JSON (no authentication required — restrict access at the network level):
-Bind the process to `127.0.0.1` when possible, or enforce a host firewall / security-group rule so only trusted operators can reach it.
-
-```json
-{
-  "uptime_seconds": 3600.4,
-  "requests_total": 142,
-  "stream_requests": 38,
-  "masked_items_total": 89,
-  "masked_requests_total": 61,
-  "unmasked_items_total": 89,
-  "mask_rate_pct": "42.96%",
-  "upstream_errors_total": 2,
-  "vault_evictions_total": 0,
-  "vault_current": 47,
-  "vault_limit": 1000,
-  "vault_fill_pct": "4.70%",
-  "vault_unmask_hits_total": 95
-}
-```
-
-### Prometheus Integration
-
-Use the [Prometheus textfile collector](https://github.com/prometheus/node_exporter#textfile-collector) or a simple scrape job with JSON parsing:
-
-```yaml
-# prometheus.yml scrape config
-scrape_configs:
-  - job_name: 'ai_firewall'
-    static_configs:
-      - targets: ['localhost:8080']
-    metrics_path: '/metrics'
-    # Use json_exporter or a custom relabeling rule to parse JSON
-```
-
-Key metrics to alert on:
-
-| Metric | Alert condition |
-|---|---|
-| `vault_fill_pct` | > 80% — vault approaching limit |
-| `upstream_errors_total` | Increasing rate — upstream API issues |
-| `vault_evictions_total` | > 0 — secrets leaking due to full vault |
-| `mask_rate_pct` | Sudden drop — pattern coverage regression |
-
----
-
-## 🛡️ Pattern Coverage
-
-The following patterns are detected and masked automatically:
-
-| Category | Pattern | Example |
-|---|---|---|
-| TOKEN | GitHub PAT v1 | `ghp_XXXXXXXX...` |
-| TOKEN | GitHub OAuth App token | `gho_XXXXXXXX...` |
-| TOKEN | GitHub Actions token | `ghs_XXXXXXXX...` |
-| TOKEN | GitLab PAT | `glpat-XXXXXXXX` |
-| TOKEN | HTTP Bearer token | `Authorization: Bearer <token>` |
-| KEY | AWS Access Key ID | `AKIAIOSFODNN7...` |
-| KEY | AWS Secret Access Key | `aws_secret_key=...` |
-| KEY | PEM private key block | `-----BEGIN PRIVATE KEY-----` |
-| SECRET | Inline secret assignment | `password=...`, `api_key: "..."` |
-| SECRET | Shell export | `export DB_PASS=...` |
-| PATH | Unix absolute path | `/home/alice/.ssh/id_rsa` |
-| PATH | Windows absolute path | `C:\Users\alice\Documents\...` |
-| PII | E-mail address | `alice@example.com` |
-
----
-
-## 🛡️ Why Not Traditional DLP?
-
-Traditional Data Loss Prevention (DLP) systems scan outgoing network traffic and block requests if a secret is found. This breaks application workflows, disrupts developers, and requires complex exception management.
-
-**Local AI Firewall** takes a different approach:
-- **Preserves Workflows**: It does not block or reject queries.
-- **Transparent Substitution**: Secrets are seamlessly replaced with unique, random labels (e.g. `[[EMAIL_A1B2C3D4]]`).
-- **Lossless Reconstruction**: Returned answers containing the labels are reconstructed with their original values on the fly.
-- **No Developer Impact**: The user experience remains uninterrupted, and the upstream AI provider receives safe, anonymized prompts.
-
----
-
-## ⚡ Performance
-
-Designed with high-efficiency Go constructs for sub-millisecond latencies:
-
-- **Regex Pre-compilation**: Pattern detection uses pre-compiled regular expressions initialized at startup, resulting in zero allocation per request match.
-- **Constant Time Lookups**: Vault mappings are resolved in $O(1)$ time complexity using hash maps.
-- **Lock-free Counters**: Metrics are collected using CPU-level atomic primitives (`sync/atomic`), avoiding locks on common paths.
-- **Low Memory Footprint**: Typically runs under `< 10 MB` RSS under active local workloads.
-
-### Benchmark Guidelines (MacBook Pro M3)
-- **Masking 2 KB prompt**: ~35 µs
-- **Masking 20 KB prompt**: ~210 µs
-
----
-
-## 🔬 Running Tests
-
-```bash
-go test ./masker/... -v -count=1
-go test ./...        -v
-go vet ./...
-```
-
-Test coverage includes:
-
-- ✅ `Mask()` output does not contain the original sensitive value (10 patterns)
-- ✅ `Unmask(Mask(x)) == x` round-trip for every pattern type
-- ✅ Vault-full: masking skipped, original value preserved (not silently dropped)
-- ✅ SSE split-chunk: label split across two network packets → correctly reassembled
-- ✅ Multi-split streaming with three labels at arbitrary chunk boundaries
-- ✅ `ByType` breakdown matches `MaskedCount`
-- ✅ Label format `[[PREFIX_8HEXDIGITS]]` validation
-- ✅ Edge cases: empty input, plain text with no secrets, unknown vault labels
-
----
-
-## 🏗️ Architecture
-
-```
-github.com/localai/firewall/
-├── main.go                 — startup, signal handling, HTTP mux
-├── config/config.go        — env var loading, LoadForTest()
-├── vault/vault.go          — thread-safe label→value store
-├── patterns/patterns.go    — compiled regex registry
-├── masker/
-│   ├── masker.go           — Mask() / Unmask() engine
-│   └── masker_test.go      — unit tests (table-driven)
-├── providers/
-│   ├── provider.go         — Provider interface + Detect() + DetectByHint()
-│   ├── anthropic.go        — x-api-key + anthropic-version
-│   ├── gemini.go           — x-goog-api-key / OAuth2 Bearer
-│   └── openai_compat.go    — OpenAI, Azure, Groq, Together, Mistral,
-│                             Perplexity, Cohere, DeepSeek, xAI, Ollama,
-│                             LM Studio, Antigravity, Generic
-├── proxy/
-│   ├── handler.go          — 5-step pipeline (mask→forward→unmask)
-│   └── stream.go           — SSE chunk-safe streamProcessor
-└── metrics/metrics.go      — atomic counters + /metrics JSON handler
-```
-
----
-
-## 🤝 Contributing
-
-1. Fork & clone
-2. `go test ./...` must pass with no failures
-3. `go vet ./...` must report no issues
-4. Add a `SensitivePattern` entry in `patterns/patterns.go` for new detection rules
-5. Add a new provider by implementing `Provider` interface (or embedding `openAICompatProvider`) in `providers/`
-
----
-
-## 📜 License
-
-MIT — see [LICENSE](LICENSE).
+AGPL-3.0-or-later — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

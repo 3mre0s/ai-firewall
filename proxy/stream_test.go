@@ -39,7 +39,7 @@ func TestStreamProcessorSplitChunk(t *testing.T) {
 		t.Fatalf("vault.Store: %v", err)
 	}
 
-	proc := newStreamProcessor(m)
+	proc := NewStreamProcessor(m)
 
 	chunk1 := []byte("Here is the value: [[SECRET_")
 	chunk2 := []byte("A4F0C8B2]] — use wisely.")
@@ -91,7 +91,7 @@ func TestStreamProcessorMultipleSplits(t *testing.T) {
 
 	// Split at byte 15 and 45 to guarantee cross-boundary labels.
 	// (Sınır ötesi etiketleri garanti etmek için 15. ve 45. baytta böl.)
-	proc := newStreamProcessor(m)
+	proc := NewStreamProcessor(m)
 	parts := [][]byte{
 		[]byte(full[:15]),
 		[]byte(full[15:45]),
@@ -124,7 +124,7 @@ func TestStreamProcessorNoLabels(t *testing.T) {
 	cfg := config.LoadForTest()
 	v := vault.New(1000)
 	m := masker.New(v, cfg)
-	proc := newStreamProcessor(m)
+	proc := NewStreamProcessor(m)
 
 	plain := "This is a perfectly normal SSE stream with no labels at all."
 	out := proc.Process([]byte(plain))

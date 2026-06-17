@@ -64,7 +64,7 @@ func (v *Vault) Store(label, original string) error {
 	defer v.mu.Unlock()
 
 	if len(v.entries) >= v.limit {
-		return fmt.Errorf("vault limit reached (kasa limitine ulaşıldı): %d/%d", len(v.entries), v.limit)
+		return fmt.Errorf("vault limit reached: %d/%d", len(v.entries), v.limit)
 	}
 
 	v.entries[label] = &Entry{

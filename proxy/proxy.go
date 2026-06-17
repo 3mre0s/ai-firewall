@@ -51,10 +51,10 @@ func NewServer(cfg *config.Config, m *masker.Masker) *Server {
 	var p providers.Provider
 	if cfg.ProviderHint != "" {
 		p = providers.DetectByHint(cfg.ProviderHint)
-		log.Printf("[firewall][info] provider override (sağlayıcı geçersiz kılındı): %s", p.Name())
+		log.Printf("[firewall][info] provider override: %s", p.Name())
 	} else {
 		p = providers.Detect(cfg.UpstreamURL)
-		log.Printf("[firewall][info] provider auto-detected (otomatik algılandı): %s", p.Name())
+		log.Printf("[firewall][info] provider auto-detected: %s", p.Name())
 	}
 
 	return &Server{
@@ -121,7 +121,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only POST requests reach AI endpoints; reject everything else early.
 	// (Yalnızca POST istekleri AI uç noktalarına ulaşır; diğerlerini erken reddet.)
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed (yöntem izin verilmiyor)", http.StatusMethodNotAllowed)
+		metrics.Global.IncBlockedRequests()
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -131,7 +132,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ── Step 1: Read the full request body ───────────────────────────────────
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "cannot read request body (istek gövdesi okunamıyor)", http.StatusBadRequest)
+		http.Error(w, "cannot read request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -160,8 +161,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//  Çözüm: VAULT_SIZE_LIMIT değerini artır veya vault'u temizlemek için
 	//  proxy'yi yeniden başlat.)
 	if maskResult.VaultEvictions > 0 {
-		s.logf("error", "🚨 vault full — %d secret(s) could not be masked, request blocked (vault dolu — %d gizli değer maskelenemiyor, istek engellendi)",
-			maskResult.VaultEvictions, maskResult.VaultEvictions)
+		metrics.Global.IncBlockedRequests()
+		s.logf("error", "🚨 vault full — %d secret(s) could not be masked, request blocked",
+			maskResult.VaultEvictions)
 		http.Error(w,
 			`{"error":"firewall_vault_full","message":"Vault capacity exceeded. Request blocked to prevent data leak. Increase VAULT_SIZE_LIMIT or restart the proxy."}`,
 			http.StatusInsufficientStorage) // 507
@@ -188,7 +190,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bytes.NewBufferString(maskResult.Text),
 	)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("cannot build upstream request (hedef istek oluşturulamıyor): %v", err),
+		http.Error(w, fmt.Sprintf("cannot build upstream request: %v", err),
 			http.StatusInternalServerError)
 		return
 	}
@@ -202,7 +204,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.client.Do(upstreamReq)
 	if err != nil {
 		metrics.Global.IncUpstreamErrors()
-		http.Error(w, fmt.Sprintf("upstream error (hedef hata): %v", err), http.StatusBadGateway)
+		http.Error(w, fmt.Sprintf("upstream error: %v", err), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -256,10 +258,22 @@ func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader) {
 // http.Flusher is required; if the ResponseWriter doesn't support it we fall
 // back to buffering the whole response (graceful degradation).
 //
-// (SSE gövdesini streamProcessor aracılığıyla parça parça işler.
+// KNOWN LIMITATION — partial-chunk delivery on fail-fast:
+// The fail-fast mechanism terminates the stream as soon as a secret pattern is
+// detected in the CURRENT chunk.  Any chunks that were already flushed to the
+// HTTP response writer before detection cannot be recalled — HTTP streaming
+// has no rewind.  The leaked content (the offending chunk itself) is suppressed:
+// the proxy drops it and closes the connection, so the client receives an abrupt
+// EOF instead.  Chunks sent BEFORE the secret-bearing chunk are unaffected.
 //
-//	http.Flusher gereklidir; ResponseWriter bunu desteklemiyorsa tüm yanıtı
-//	arabelleğe alarak geri dönülür (zarifçe bozulma).)
+// (BİLİNEN SINIR — fail-fast sırasında kısmi-chunk iletimi:
+//
+//	Fail-fast mekanizması, MEVCUT chunk'ta bir sır deseni tespit edildiği anda
+//	akışı sonlandırır. Tespitten önce HTTP yanıt yazıcısına aktarılmış chunk'lar
+//	geri alınamaz — HTTP streaming'de geri sarma yoktur. Sızdırılan içerik
+//	(sorunlu chunk'ın kendisi) bastırılır: proxy onu düşürür ve bağlantıyı kapatır,
+//	böylece istemci beklenmedik bir EOF alır. Sır barındıran chunk'tan ÖNCEKİ
+//	chunk'lar etkilenmez.)
 func (s *Server) handleStream(w http.ResponseWriter, body io.Reader) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -268,13 +282,19 @@ func (s *Server) handleStream(w http.ResponseWriter, body io.Reader) {
 		return
 	}
 
-	processor := newStreamProcessor(s.masker)
+	processor := NewStreamProcessor(s.masker)
 	buf := make([]byte, 4096)
 
 	for {
 		n, err := body.Read(buf)
 		if n > 0 {
 			out := processor.Process(buf[:n])
+			// Fail-fast: secret detected in output — close connection immediately.
+			// (Hızlı başarısızlık: çıktıda sır tespit edildi — bağlantıyı derhal kapat.)
+			if processor.LeakDetected() {
+				s.logf("error", "🚨 secret detected in stream — terminating connection (akışta sır tespit edildi — bağlantı sonlandırılıyor)")
+				return
+			}
 			if out != "" {
 				w.Write([]byte(out))
 				flusher.Flush()
@@ -290,7 +310,12 @@ func (s *Server) handleStream(w http.ResponseWriter, body io.Reader) {
 
 	// Flush any remaining buffered content.
 	// (Kalan arabelleğe alınmış içeriği temizle.)
-	if tail := processor.Flush(); tail != "" {
+	tail := processor.Flush()
+	if processor.LeakDetected() {
+		s.logf("error", "🚨 secret in stream tail — terminating (akış kuyruğunda sır — sonlandırılıyor)")
+		return
+	}
+	if tail != "" {
 		w.Write([]byte(tail))
 		flusher.Flush()
 	}
@@ -304,9 +329,10 @@ func (s *Server) handleStream(w http.ResponseWriter, body io.Reader) {
 // We use an explicit allow-list (izin listesi) rather than forwarding everything
 // to prevent header injection attacks (başlık enjeksiyon saldırıları).
 //
-// NOTE: Authentication headers (like Authorization, X-Goog-Api-Key) MUST NOT
-// be in this list. They are exclusively managed by provider.PrepareHeaders().
-// Including them here would leak e.g. a Gemini key to an OpenAI upstream.
+// NOTE: Authentication headers (like Authorization, X-Goog-Api-Key) are included
+// in this list so they can flow through unchanged during passthrough mode
+// (FORWARD_API_KEY=none). In API-key mode, provider.PrepareHeaders() will overwrite
+// or delete them to prevent credential leaks.
 var allowedRequestHeaders = []string{
 	"Accept",
 	"Accept-Language",
@@ -314,6 +340,11 @@ var allowedRequestHeaders = []string{
 	"X-Request-Id",
 	"Anthropic-Version",
 	"Anthropic-Beta",
+	"Openai-Organization",
+	"Authorization",  // passthrough mode (FORWARD_API_KEY=none): client's Bearer token flows through
+	"X-Api-Key",
+	"X-Goog-Api-Key",
+	"Api-Key",
 }
 
 // allowedResponseHeaders lists upstream headers we forward back to the client.
@@ -385,23 +416,33 @@ func (s *Server) logf(level, format string, args ...any) {
 //	çözmek, asla çözülemeyen bozuk bir etiket bırakır.
 //	Çözüm: sürekli bir arabellek tutmak. Yalnızca hiçbir etiketin hâlâ
 //	oluşmadığından emin olduğumuz konuma kadar metni temizleriz.)
-type streamProcessor struct {
-	masker *masker.Masker
-	buf    strings.Builder // incomplete tail from previous chunk (önceki parçadan tamamlanmamış kuyruk)
+type StreamProcessor struct {
+	masker       *masker.Masker
+	buf          strings.Builder // incomplete tail from previous chunk (önceki parçadan tamamlanmamış kuyruk)
+	leakDetected bool            // set when a secret is found in stream output (akış çıktısında sır bulunduğunda set edilir)
 }
 
-// newStreamProcessor creates a processor for one streaming response lifetime.
+// LeakDetected reports whether a secret pattern was found in the stream output.
+// When true, the caller must terminate the stream immediately.
+// (Akış çıktısında bir sır deseni bulunup bulunmadığını bildirir.
+//
+//	True olduğunda çağıranın akışı derhal sonlandırması gerekir.)
+func (sp *StreamProcessor) LeakDetected() bool {
+	return sp.leakDetected
+}
+
+// NewStreamProcessor creates a processor for one streaming response lifetime.
 // (Bir akış yanıtının ömrü için bir işlemci oluşturur.)
-func newStreamProcessor(m *masker.Masker) *streamProcessor {
-	return &streamProcessor{masker: m}
+func NewStreamProcessor(m *masker.Masker) *StreamProcessor {
+	return &StreamProcessor{masker: m}
 }
 
 // maxStreamBufBytes is the upper bound for the rolling buffer inside
-// streamProcessor. If the buffer grows beyond this (e.g. upstream drops
+// StreamProcessor. If the buffer grows beyond this (e.g. upstream drops
 // mid-stream or an LLM emits a bare "[[" that never closes), we force-flush
 // to prevent unbounded memory growth, accepting a small risk of a split label.
 //
-// (streamProcessor içindeki sürekli arabellek için üst sınır.
+// (StreamProcessor içindeki sürekli arabellek için üst sınır.
 // Arabellek bu değeri aşarsa (örn. upstream bağlantısı koparsa veya LLM
 // kapanmayan bir "[["  üretirse), bellek birikimini önlemek amacıyla zorla
 // temizleme yapılır; bu durumda bölünmüş etiket küçük bir risk oluşturur.)
@@ -417,19 +458,30 @@ const maxStreamBufBytes = 512 * 1024 // 512 KB
 // her şeyi temizler.
 // Şu anda istemciye yazmak için güvenli olan maskelenmemiş metni döner.
 // Tüm arabellek tamamlanmamış bir etiket olabiliyorsa boş dize döndürebilir.)
-func (sp *streamProcessor) Process(chunk []byte) string {
+func (sp *StreamProcessor) Process(chunk []byte) string {
 	sp.buf.Write(chunk)
 
 	// Tampon sınırı aşıldıysa, yarım etiket riski göze alınarak zorla temizle.
 	if sp.buf.Len() > maxStreamBufBytes {
-		flushed := sp.masker.Unmask(sp.buf.String())
+		content := sp.buf.String()
 		sp.buf.Reset()
-		return flushed
+		// Fail-fast check on the raw content BEFORE unmasking.
+		// Vault labels ([[PREFIX_HEX]]) never match secret patterns, so any hit here
+		// is a genuine leak that was never routed through our masking pipeline.
+		// (Maskeleme kaldırmadan ÖNCE ham içeriği kontrol et.
+		//  Kasa etiketleri [[PREFIX_HEX]] asla sır desenlerine uymaz; dolayısıyla
+		//  buradaki her eşleşme maskeleme hattımızdan hiç geçmemiş gerçek bir sızıntıdır.)
+		if sp.masker.HasSecrets(content) {
+			log.Printf("[stream][error] 🚨 secret detected in stream output — terminating")
+			sp.leakDetected = true
+			return ""
+		}
+		return sp.masker.Unmask(content)
 	}
 
 	current := sp.buf.String()
 
-	cutpoint := safeCutpoint(current)
+	cutpoint := SafeCutpoint(current)
 	if cutpoint == 0 {
 		// Hold everything; wait for the next chunk to complete the label.
 		// (Her şeyi tut; etiketi tamamlamak için bir sonraki parçayı bekle.)
@@ -442,6 +494,18 @@ func (sp *streamProcessor) Process(chunk []byte) string {
 	sp.buf.Reset()
 	sp.buf.WriteString(tail)
 
+	// Fail-fast: check the safe window BEFORE unmasking.
+	// Vault labels like [[EMAIL_A4F0C8B2]] contain no @, sk-, ghp_ etc., so they
+	// will never match — only raw leaked secrets are caught here.
+	// (Güvenli pencereyi maskeleme kaldırmadan ÖNCE kontrol et.
+	//  [[EMAIL_A4F0C8B2]] gibi kasa etiketleri @, sk-, ghp_ içermez,
+	//  dolayısıyla eşleşmez — yalnızca ham sızdırılan sırlar burada yakalanır.)
+	if sp.masker.HasSecrets(safe) {
+		log.Printf("[stream][error] 🚨 secret detected in stream output — terminating")
+		sp.leakDetected = true
+		return ""
+	}
+
 	// Unmask any complete labels in the safe window.
 	// (Güvenli penceredeki tüm tam etiketlerin maskesini kaldır.)
 	return sp.masker.Unmask(safe)
@@ -452,10 +516,17 @@ func (sp *streamProcessor) Process(chunk []byte) string {
 // (Arabelleği koşulsuz olarak boşaltır, kalanların maskesini kaldırır.
 //
 //	Yukarı yönlü gövde EOF'a ulaştıktan sonra çağırın.)
-func (sp *streamProcessor) Flush() string {
+func (sp *StreamProcessor) Flush() string {
 	remaining := sp.buf.String()
 	sp.buf.Reset()
 	if remaining == "" {
+		return ""
+	}
+	// Fail-fast: check BEFORE unmasking — same rationale as Process().
+	// (Maskeleme kaldırmadan ÖNCE kontrol et — Process() ile aynı gerekçe.)
+	if sp.masker.HasSecrets(remaining) {
+		log.Printf("[stream][error] 🚨 secret detected in stream tail — terminating")
+		sp.leakDetected = true
 		return ""
 	}
 	return sp.masker.Unmask(remaining)
@@ -465,7 +536,7 @@ func (sp *streamProcessor) Flush() string {
 // safeCutpoint
 // ════════════════════════════════════════════════════════════════════════════
 
-// safeCutpoint returns the index up to which text can be safely unmasked.
+// SafeCutpoint returns the index up to which text can be safely unmasked.
 // Any text at or after this index might be the start of an incomplete label
 // and must be held in the buffer.
 //
@@ -478,7 +549,7 @@ func (sp *streamProcessor) Flush() string {
 //   - Everything before that "[[" is safe.
 //   - If all "[[" are closed by "]]", the whole text is safe.
 //   - If the text contains no "[[" at all, the whole text is safe.
-func safeCutpoint(text string) int {
+func SafeCutpoint(text string) int {
 	lastOpen := strings.LastIndex(text, "[[")
 	if lastOpen == -1 {
 		// No label opening anywhere — the entire text is safe to flush.

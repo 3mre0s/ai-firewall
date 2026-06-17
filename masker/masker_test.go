@@ -332,7 +332,712 @@ func TestLabelFormat(t *testing.T) {
 	}
 }
 
-// ── 7. Edge cases ─────────────────────────────────────────────────────────────
+// ── 7. HasSecrets — read-only leak detection ─────────────────────────────────
+
+// TestHasSecrets_VaultLabelNoFalsePositive is a regression guard for the
+// streaming fail-fast mechanism.  If a response chunk contains only vault
+// labels (e.g. [[GH_PAT_3F7A1B2C]]) with no raw sensitive data, HasSecrets
+// must return false so that legitimate unmasked values are never blocked.
+//
+// This test will catch regressions if the label format ever changes to a
+// string that accidentally matches a secret pattern.
+//
+// (Akış fail-fast mekanizması için regresyon koruması. Yanıt chunk'ı yalnızca
+//
+//	kasa etiketleri içeriyorsa (ör. [[GH_PAT_3F7A1B2C]]) ve ham hassas veri
+//	yoksa, HasSecrets false döndürmelidir; aksi hâlde meşru değerler engellenir.
+//	Bu test, etiket formatı yanlışlıkla bir sır desenini tetikleyen bir stringe
+//	dönüşürse yakalanır.)
+func TestHasSecrets_VaultLabelNoFalsePositive(t *testing.T) {
+	t.Parallel()
+
+	m := newTestMasker(1000)
+
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "single GH_PAT label",
+			input: "[[GH_PAT_3F7A1B2C]]",
+		},
+		{
+			name:  "OAI_KEY label in JSON",
+			input: `{"content": "[[OAI_KEY_A4F0C8B2]]"}`,
+		},
+		{
+			name:  "EMAIL label in SSE chunk",
+			input: `data: {"delta": {"content": "Hello [[EMAIL_DEAD1234]]"}}`,
+		},
+		{
+			name:  "multiple labels, no raw secrets",
+			input: "From [[EMAIL_AAAABBBB]] to [[EMAIL_CCCCDDDD]] via [[TOKEN_11223344]]",
+		},
+		{
+			name:  "safe plain text",
+			input: "This is a completely ordinary sentence with no secrets.",
+		},
+		{
+			name:  "label with surrounding prose",
+			input: "Your masked value is [[GH_PAT_3F7A1B2C]] — please keep it safe.",
+		},
+		{
+			// JWT pattern matches eyJ<10+>.eyJ<10+>.<10+> — the vault label
+			// [[JWT_A4F0C8B2]] must NOT match this because it lacks the two
+			// '.' separators and the three base64url segments.
+			// ([[JWT_A4F0C8B2]] etiketinin üç parçalı JWT desenini tetiklememesi
+			//  gerekir; '.' ayırıcısı veya eyJ ile başlayan segment yoktur.)
+			name:  "JWT vault label no false positive",
+			input: `{"delta": {"content": "[[JWT_A4F0C8B2]]"}}`,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if m.HasSecrets(tc.input) {
+				t.Errorf("[FAIL] HasSecrets(%q) = true, want false — vault labels must not trigger fail-fast",
+					tc.input)
+			}
+		})
+	}
+}
+
+// TestHasSecrets_DetectsRealSecrets verifies that HasSecrets returns true for
+// text that actually contains sensitive patterns (the positive path).
+// (HasSecrets'in gerçek hassas desenler içeren metin için true döndürdüğünü
+//
+//	doğrular — pozitif yol.)
+func TestHasSecrets_DetectsRealSecrets(t *testing.T) {
+	t.Parallel()
+
+	m := newTestMasker(1000)
+
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{name: "OpenAI key", input: `{"content": "sk-proj-ABC123456789DEF456789XYZ"}`},
+		{name: "GitHub PAT", input: "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"},
+		{name: "email address", input: "data: contact alice@example.com for help"},
+		{name: "AWS access key", input: "AKIAIOSFODNN7EXAMPLE is the key"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if !m.HasSecrets(tc.input) {
+				t.Errorf("[FAIL] HasSecrets(%q) = false, want true — real secret must be detected",
+					tc.input)
+			}
+		})
+	}
+}
+
+// ── 8. New-pattern leak-prevention tests ─────────────────────────────────────
+
+// TestNewPatternsMaskDoesNotLeak verifies that each newly added pattern
+// (Anthropic, Google, Slack, Stripe, JWT) never reaches the upstream in plain text.
+// This is the "sızdırmaz" (leak-proof) test for every new pattern.
+//
+// (Yeni eklenen her desenin (Anthropic, Google, Slack, Stripe, JWT) düz metin
+//
+//	olarak upstream'e ulaşmadığını doğrular. Her yeni desen için "sızdırmaz" testi.)
+func TestNewPatternsMaskDoesNotLeak(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		sensitive string
+		wantLabel string // expected vault label prefix
+	}{
+		{
+			name:      "Anthropic API key",
+			input:     "key=sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+			sensitive: "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+			wantLabel: "[[ANT_KEY_",
+		},
+		{
+			// AIza + exactly 35 alphanumeric/dash/underscore chars = 39 total
+			name:      "Google API key",
+			input:     `{"api_key":"AIzaSyCi-1234567890ABCDEFGHIJKLMNOPQRab"}`,
+			sensitive: "AIzaSyCi-1234567890ABCDEFGHIJKLMNOPQRab",
+			wantLabel: "[[GOOG_KEY_",
+		},
+		{
+			name:      "Slack bot token",
+			input:     "SLACK_TOKEN=xoxb-1234567890-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXa",
+			sensitive: "xoxb-1234567890-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXa",
+			wantLabel: "[[SLACK_TOK_",
+		},
+		{
+			name:      "Slack user token",
+			input:     "token: xoxp-9876543210-9876543210-ABCDEFGHIJKLMNOPQRSTUVWXa",
+			sensitive: "xoxp-9876543210-9876543210-ABCDEFGHIJKLMNOPQRSTUVWXa",
+			wantLabel: "[[SLACK_TOK_",
+		},
+		{
+			name:      "Stripe live secret key",
+			input:     "stripe_key=sk_live_ABCDEFGHIJKLMNOPQRSTUVWXa",
+			sensitive: "sk_live_ABCDEFGHIJKLMNOPQRSTUVWXa",
+			wantLabel: "[[STRIPE_KEY_",
+		},
+		{
+			name:      "Stripe live publishable key",
+			input:     "pub_key=pk_live_ABCDEFGHIJKLMNOPQRSTUVWXa",
+			sensitive: "pk_live_ABCDEFGHIJKLMNOPQRSTUVWXa",
+			wantLabel: "[[STRIPE_KEY_",
+		},
+		{
+			name:      "JWT standalone",
+			input:     `{"token":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0VXNlciJ9.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"}`,
+			sensitive: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0VXNlciJ9.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
+			wantLabel: "[[JWT_",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			result := m.Mask(tc.input)
+
+			if strings.Contains(result.Text, tc.sensitive) {
+				t.Errorf("[FAIL] masked output still contains sensitive value\n"+
+					"  input:     %q\n"+
+					"  output:    %q\n"+
+					"  sensitive: %q",
+					tc.input, result.Text, tc.sensitive)
+			}
+			if result.MaskedCount == 0 {
+				t.Errorf("[FAIL] MaskedCount == 0, pattern did not fire for %q", tc.name)
+			}
+			if !strings.Contains(result.Text, tc.wantLabel) {
+				t.Errorf("[FAIL] expected label prefix %q in output, got %q",
+					tc.wantLabel, result.Text)
+			}
+		})
+	}
+}
+
+// TestNewPatternsRoundTrip verifies Mask→Unmask recovers the original for new patterns.
+// (Yeni desenler için Mask→Unmask'ın orijinali geri kazandırdığını doğrular.)
+func TestNewPatternsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	inputs := []string{
+		"key=sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+		`{"api_key":"AIzaSyCi-1234567890ABCDEFGHIJKLMNOPQRab"}`,
+		"SLACK_TOKEN=xoxb-1234567890-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXa",
+		"stripe_key=sk_live_ABCDEFGHIJKLMNOPQRSTUVWXa",
+		`{"token":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0VXNlciJ9.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"}`,
+	}
+
+	for _, input := range inputs {
+		input := input
+		t.Run(input[:min(30, len(input))], func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			masked := m.Mask(input)
+			recovered := m.Unmask(masked.Text)
+			if recovered != input {
+				t.Errorf("[FAIL] round-trip mismatch\n  original:  %q\n  masked:    %q\n  recovered: %q",
+					input, masked.Text, recovered)
+			}
+		})
+	}
+}
+
+// ── 10. Turkish PII — TC Kimlik No & Phone ────────────────────────────────────
+//
+// Valid TC Kimlik numbers used below are derived from the official algorithm:
+//   d10 = (7*(d1+d3+d5+d7+d9) - (d2+d4+d6+d8)) mod 10
+//   d11 = (d1+..+d10) mod 10
+//
+// 12345678950: oddSum=25 evenSum=20 → d10=5 sum10=50 → d11=0  ✓
+// 10000000078: oddSum=1  evenSum=0  → d10=7 sum10=8  → d11=8  ✓
+
+// TestTCKimlikSızdırmaz verifies valid TC Kimlik numbers are masked (leak-proof).
+// (Geçerli TC Kimlik No'ların maskelendiğini doğrular — sızdırmaz testi.)
+func TestTCKimlikSızdırmaz(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		input     string
+		sensitive string
+	}{
+		{
+			name:      "bare valid TC Kimlik",
+			input:     "TC Kimlik No: 12345678950",
+			sensitive: "12345678950",
+		},
+		{
+			name:      "valid TC Kimlik in sentence",
+			input:     "Kişi 10000000078 kimlik numarasıyla kayıtlıdır.",
+			sensitive: "10000000078",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			result := m.Mask(tc.input)
+			if strings.Contains(result.Text, tc.sensitive) {
+				t.Errorf("[FAIL] masked output still contains TC Kimlik\n  input:  %q\n  output: %q", tc.input, result.Text)
+			}
+			if result.MaskedCount == 0 {
+				t.Errorf("[FAIL] MaskedCount==0, TC Kimlik pattern did not fire for %q", tc.input)
+			}
+		})
+	}
+}
+
+// TestTCKimlikRoundTrip verifies Mask→Unmask is lossless for valid TC Kimlik numbers.
+// (Geçerli TC Kimlik No'lar için Mask→Unmask'ın kayıpsız olduğunu doğrular.)
+func TestTCKimlikRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	inputs := []string{
+		"TC Kimlik No: 12345678950",
+		"Vatandaş kimliği 10000000078 olarak doğrulandı.",
+	}
+
+	for _, input := range inputs {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			masked := m.Mask(input)
+			recovered := m.Unmask(masked.Text)
+			if recovered != input {
+				t.Errorf("[FAIL] round-trip mismatch\n  original:  %q\n  masked:    %q\n  recovered: %q",
+					input, masked.Text, recovered)
+			}
+		})
+	}
+}
+
+// TestTCKimlikFalsePositiveReduction verifies that 11-digit numbers that fail the
+// checksum (order IDs, random numbers, etc.) are NOT masked.
+// (Sağlama toplamını geçemeyen 11 haneli sayıların (sipariş no, rastgele sayı vb.)
+//  maskelenmediğini doğrular — yanlış pozitif azaltma testi.)
+func TestTCKimlikFalsePositiveReduction(t *testing.T) {
+	t.Parallel()
+
+	// Each value is 11 digits starting with [1-9] (passes the regex) but has a
+	// wrong checksum (fails validateTCKimlik) — must NOT be masked.
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{
+			// d10 should be 5 but is 0 → invalid
+			name:  "wrong d10 digit",
+			input: "Sipariş: 12345678900",
+		},
+		{
+			// d10=1 passes, but d11 should be 0, is 1 → invalid
+			name:  "wrong d11 digit",
+			input: "Ref: 11111111111",
+		},
+		{
+			// d10=9 passes, but d11 should be 0, is 9 → invalid
+			name:  "all nines",
+			input: "ID: 99999999999",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			result := m.Mask(tc.input)
+			if result.Text != tc.input {
+				t.Errorf("[FAIL] false-positive: invalid TC Kimlik was masked\n  input:  %q\n  output: %q",
+					tc.input, result.Text)
+			}
+		})
+	}
+}
+
+// TestTCKimlikHasSecrets verifies HasSecrets returns true for valid TC Kimlik
+// and false for invalid-checksum numbers (fail-fast must not fire on junk IDs).
+// (HasSecrets'in geçerli TC Kimlik için true, geçersiz sağlama toplamı için
+//  false döndürdüğünü doğrular.)
+func TestTCKimlikHasSecrets(t *testing.T) {
+	t.Parallel()
+
+	m := newTestMasker(1000)
+
+	if !m.HasSecrets("TC: 12345678950") {
+		t.Error("[FAIL] HasSecrets should return true for a valid TC Kimlik number")
+	}
+	if m.HasSecrets("sipariş: 12345678900") {
+		t.Error("[FAIL] HasSecrets should return false for an invalid-checksum 11-digit number")
+	}
+}
+
+// TestTurkishPhoneSızdırmaz verifies Turkish phone numbers are masked (leak-proof).
+// (Türk telefon numaralarının maskelendiğini doğrular — sızdırmaz testi.)
+func TestTurkishPhoneSızdırmaz(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		input     string
+		sensitive string
+	}{
+		{
+			name:      "0 prefix format",
+			input:     "Telefon: 05321234567",
+			sensitive: "05321234567",
+		},
+		{
+			name:      "local 10-digit format",
+			input:     "Arayın: 5321234567",
+			sensitive: "5321234567",
+		},
+		{
+			name:      "spaced local format",
+			input:     "Tel: 532 123 45 67",
+			sensitive: "532 123 45 67",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			result := m.Mask(tc.input)
+			if strings.Contains(result.Text, tc.sensitive) {
+				t.Errorf("[FAIL] masked output still contains phone number\n  input:  %q\n  output: %q", tc.input, result.Text)
+			}
+			if result.MaskedCount == 0 {
+				t.Errorf("[FAIL] MaskedCount==0, phone pattern did not fire for %q", tc.input)
+			}
+		})
+	}
+}
+
+// TestTurkishPhoneRoundTrip verifies Mask→Unmask is lossless for Turkish phone numbers.
+// (Türk telefon numaraları için Mask→Unmask'ın kayıpsız olduğunu doğrular.)
+func TestTurkishPhoneRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	inputs := []string{
+		"Telefon: 05321234567",
+		"Arayın: 5321234567 veya 5009876543",
+	}
+
+	for _, input := range inputs {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			masked := m.Mask(input)
+			recovered := m.Unmask(masked.Text)
+			if recovered != input {
+				t.Errorf("[FAIL] round-trip mismatch\n  original:  %q\n  masked:    %q\n  recovered: %q",
+					input, masked.Text, recovered)
+			}
+		})
+	}
+}
+
+// ── 11. National ID patterns — positive + negative checksum tests ─────────────
+//
+// Positive case: valid checksum → must be masked (MaskedCount > 0, sensitive value absent).
+// Negative case: same length/format, wrong checksum → must NOT be masked (text unchanged).
+
+// ---- Brazil CPF ----
+// Valid:   52998224725 (d10=(295%11→9)→11-9=2, d11=(347%11→6)→11-6=5)
+//          11144477735 (d10=(162%11→8)→11-8=3, d11=(204%11→6)→11-6=5)
+// Invalid: 52998224724 (last digit wrong), 11111111111 (all-same → law invalid)
+
+func TestCPFSızdırmaz(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input, sensitive string }{
+		{"bare", "CPF: 52998224725", "52998224725"},
+		{"formatted", "CPF: 529.982.247-25", "529.982.247-25"},
+		{"second valid", "doc 11144477735", "11144477735"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if strings.Contains(r.Text, tc.sensitive) {
+				t.Errorf("[FAIL] CPF leaked\n  input=%q\n  output=%q", tc.input, r.Text)
+			}
+			if r.MaskedCount == 0 {
+				t.Errorf("[FAIL] CPF pattern did not fire for %q", tc.input)
+			}
+		})
+	}
+}
+
+func TestCPFRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{
+		"CPF: 52998224725",
+		"CPF formatado: 529.982.247-25",
+	} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			if got := m.Unmask(m.Mask(input).Text); got != input {
+				t.Errorf("[FAIL] CPF round-trip: %q → %q", input, got)
+			}
+		})
+	}
+}
+
+func TestCPFFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input string }{
+		{"wrong last digit", "doc: 52998224724"},
+		{"all same digits", "doc: 11111111111"},
+		{"all zeros", "doc: 00000000000"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if r.Text != tc.input {
+				t.Errorf("[FAIL] CPF false-positive: %q was masked to %q", tc.input, r.Text)
+			}
+		})
+	}
+}
+
+// ---- Spain DNI ----
+// Valid:   12345678Z (12345678 % 23 = 14 → Z), 00000000T (0 % 23 = 0 → T)
+// Invalid: 12345678A (need Z, not A)
+
+func TestDNISızdırmaz(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input, sensitive string }{
+		{"standard", "DNI: 12345678Z", "12345678Z"},
+		{"leading zeros", "doc: 00000000T", "00000000T"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if strings.Contains(r.Text, tc.sensitive) {
+				t.Errorf("[FAIL] DNI leaked\n  input=%q\n  output=%q", tc.input, r.Text)
+			}
+			if r.MaskedCount == 0 {
+				t.Errorf("[FAIL] DNI pattern did not fire for %q", tc.input)
+			}
+		})
+	}
+}
+
+func TestDNIRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"DNI: 12345678Z", "ID: 00000000T"} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			if got := m.Unmask(m.Mask(input).Text); got != input {
+				t.Errorf("[FAIL] DNI round-trip: %q → %q", input, got)
+			}
+		})
+	}
+}
+
+func TestDNIFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input string }{
+		{"wrong letter", "DNI: 12345678A"},
+		{"wrong letter 2", "doc: 00000000R"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if r.Text != tc.input {
+				t.Errorf("[FAIL] DNI false-positive: %q masked to %q", tc.input, r.Text)
+			}
+		})
+	}
+}
+
+// ---- India Aadhaar ----
+// Valid:   234567890124 (Verhoeff-verified), 987654321096 (Verhoeff-verified)
+// Invalid: 234567890125 (last digit off by one)
+
+func TestAadhaarSızdırmaz(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input, sensitive string }{
+		{"first valid", "Aadhaar: 234567890124", "234567890124"},
+		{"second valid", "ID: 987654321096", "987654321096"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if strings.Contains(r.Text, tc.sensitive) {
+				t.Errorf("[FAIL] Aadhaar leaked\n  input=%q\n  output=%q", tc.input, r.Text)
+			}
+			if r.MaskedCount == 0 {
+				t.Errorf("[FAIL] Aadhaar pattern did not fire for %q", tc.input)
+			}
+		})
+	}
+}
+
+func TestAadhaarRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"Aadhaar: 234567890124", "ID: 987654321096"} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			if got := m.Unmask(m.Mask(input).Text); got != input {
+				t.Errorf("[FAIL] Aadhaar round-trip: %q → %q", input, got)
+			}
+		})
+	}
+}
+
+func TestAadhaarFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input string }{
+		{"bad check digit", "ID: 234567890125"},
+		{"starts with 1", "ID: 123456789012"},
+		{"starts with 0", "ID: 034567890124"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if r.Text != tc.input {
+				t.Errorf("[FAIL] Aadhaar false-positive: %q masked to %q", tc.input, r.Text)
+			}
+		})
+	}
+}
+
+// ---- Italy Codice Fiscale ----
+// Valid:   RSSMRA85A01H501Z  (odd=61, even=42, total=103, 103%26=25→Z)
+//          AAABBB00A00A000J  (odd=7, even=2, total=9, 9%26=9→J)
+// Invalid: RSSMRA85A01H501Y (need Z), AAABBB00A00A000Z (need J)
+
+func TestCFSızdırmaz(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input, sensitive string }{
+		{"standard", "CF: RSSMRA85A01H501Z", "RSSMRA85A01H501Z"},
+		{"synthetic", "codice: AAABBB00A00A000J", "AAABBB00A00A000J"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if strings.Contains(r.Text, tc.sensitive) {
+				t.Errorf("[FAIL] CF leaked\n  input=%q\n  output=%q", tc.input, r.Text)
+			}
+			if r.MaskedCount == 0 {
+				t.Errorf("[FAIL] CF pattern did not fire for %q", tc.input)
+			}
+		})
+	}
+}
+
+func TestCFRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{
+		"CF: RSSMRA85A01H501Z",
+		"codice: AAABBB00A00A000J",
+	} {
+		input := input
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			if got := m.Unmask(m.Mask(input).Text); got != input {
+				t.Errorf("[FAIL] CF round-trip: %q → %q", input, got)
+			}
+		})
+	}
+}
+
+func TestCFFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, input string }{
+		{"wrong check char", "CF: RSSMRA85A01H501Y"},
+		{"synthetic wrong", "codice: AAABBB00A00A000Z"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestMasker(1000)
+			r := m.Mask(tc.input)
+			if r.Text != tc.input {
+				t.Errorf("[FAIL] CF false-positive: %q masked to %q", tc.input, r.Text)
+			}
+		})
+	}
+}
+
+// ── Vault label no-false-positive for new national-ID prefixes ─────────────────
+// Extends the coverage of TestHasSecrets_VaultLabelNoFalsePositive.
+
+func TestNationalIDVaultLabelsNoFalsePositive(t *testing.T) {
+	t.Parallel()
+	m := newTestMasker(1000)
+	labels := []string{
+		"[[TR_ID_AABBCCDD]]",
+		"[[BR_CPF_11223344]]",
+		"[[ES_DNI_AABBCCDD]]",
+		"[[IN_AADHAAR_DEADBEEF]]",
+		"[[IT_CF_12345678]]",
+	}
+	for _, label := range labels {
+		label := label
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			if m.HasSecrets(label) {
+				t.Errorf("[FAIL] HasSecrets(%q) = true — vault label must not trigger fail-fast", label)
+			}
+		})
+	}
+}
+
+// min is a local helper for Go 1.22 (builtin min added in 1.21, this avoids ambiguity).
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ── 9. Edge cases ─────────────────────────────────────────────────────────────
 
 // TestMaskEmptyInput verifies that an empty string is handled without panic.
 // (Boş dizenin panik olmadan işlendiğini doğrular.)

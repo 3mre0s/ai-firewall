@@ -32,7 +32,14 @@ func (p *openAICompatProvider) Matches(u string) bool {
 }
 
 func (p *openAICompatProvider) PrepareHeaders(dst http.Header, apiKey string) {
-	setBearer(dst, apiKey)
+	if apiKey != "" && apiKey != "none" {
+		setBearer(dst, apiKey)
+		dst.Del("x-api-key")
+		dst.Del("x-goog-api-key")
+		dst.Del("api-key")
+	} else {
+		dst.Set("Content-Type", "application/json")
+	}
 }
 
 func (p *openAICompatProvider) IsStream(resp *http.Response) bool { return isSSE(resp) }
@@ -51,7 +58,7 @@ func NewOpenAIProvider() *OpenAIProvider {
 // Override — OpenAI specific: forward the organization header if present.
 // (Geçersiz kılma — OpenAI'a özgü: varsa organizasyon başlığını ilet.)
 func (p *OpenAIProvider) PrepareHeaders(dst http.Header, apiKey string) {
-	setBearer(dst, apiKey)
+	p.openAICompatProvider.PrepareHeaders(dst, apiKey)
 	// openai-organization is forwarded by the allow-list in handler.go
 }
 
@@ -66,7 +73,12 @@ func NewAzureOpenAIProvider() *AzureOpenAIProvider {
 }
 
 func (p *AzureOpenAIProvider) PrepareHeaders(dst http.Header, apiKey string) {
-	dst.Set("api-key", apiKey) // Azure-specific header (Azure'a özgü başlık)
+	if apiKey != "" && apiKey != "none" {
+		dst.Set("api-key", apiKey) // Azure-specific header (Azure'a özgü başlık)
+		dst.Del("Authorization")
+		dst.Del("x-api-key")
+		dst.Del("x-goog-api-key")
+	}
 	dst.Set("Content-Type", "application/json")
 }
 
@@ -128,16 +140,6 @@ type XAIProvider struct{ openAICompatProvider }
 func (p *XAIProvider) Name() string    { return "xAI (Grok)" }
 func (p *XAIProvider) Matches(u string) bool { return strings.Contains(u, "api.x.ai") }
 
-// ── AntigravityProvider — https://api.antigravity.ai ─────────────────────────
-// Antigravity AI — OpenAI-compatible inference API.
-// (Antigravity AI — OpenAI uyumlu çıkarım API'si.)
-type AntigravityProvider struct{ openAICompatProvider }
-
-func (p *AntigravityProvider) Name() string { return "Antigravity" }
-func (p *AntigravityProvider) Matches(u string) bool {
-	return strings.Contains(u, "antigravity")
-}
-
 // ── Local providers (yerel sağlayıcılar) ─────────────────────────────────────
 
 // OllamaProvider — http://localhost:11434
@@ -173,7 +175,11 @@ func (p *LMStudioProvider) Matches(u string) bool {
 func (p *LMStudioProvider) PrepareHeaders(dst http.Header, apiKey string) {
 	// LM Studio ignores the auth header but expects Content-Type.
 	// (LM Studio kimlik doğrulama başlığını yok sayar ancak Content-Type bekler.)
-	setBearer(dst, apiKey) // harmless if ignored
+	if apiKey != "" && apiKey != "none" {
+		setBearer(dst, apiKey) // harmless if ignored
+	} else {
+		dst.Set("Content-Type", "application/json")
+	}
 }
 
 // ── GenericProvider ───────────────────────────────────────────────────────────
@@ -227,7 +233,6 @@ var (
 	_ Provider = (*CohereProvider)(nil)
 	_ Provider = (*DeepSeekProvider)(nil)
 	_ Provider = (*XAIProvider)(nil)
-	_ Provider = (*AntigravityProvider)(nil)
 	_ Provider = (*OllamaProvider)(nil)
 	_ Provider = (*LMStudioProvider)(nil)
 	_ Provider = (*GenericProvider)(nil)

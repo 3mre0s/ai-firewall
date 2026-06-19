@@ -510,9 +510,9 @@ func TestPatternMasking_TableDriven(t *testing.T) {
 		},
 		{
 			name:           "Credit Card (new pattern)",
-			inputContent:   "Card: 4532 1234 5678 9010",
+			inputContent:   "Card: 4532 0151 1283 0366",
 			shouldMask:     true,
-			sensitiveValue: "4532 1234 5678 9010",
+			sensitiveValue: "4532 0151 1283 0366",
 			patternType:    "PII",
 		},
 		{
@@ -780,7 +780,7 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 	defer ts.Close()
 
 	// Original content with multiple sensitive values
-	originalContent := "Email: admin@company.com, Phone: +90 532 123 45 67, Card: 4532-1234-5678-9010"
+	originalContent := "Email: admin@company.com, Phone: +90 532 123 45 67, Card: 4532-0151-1283-0366"
 
 	requestBody := map[string]interface{}{
 		"model": "gpt-4",

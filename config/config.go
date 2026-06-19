@@ -162,6 +162,21 @@ func load(getenv func(string) string) (*Config, error) {
 	return cfg, nil
 }
 
+// CACertPaths returns the CA certificate and key file paths based on the
+// current environment, without requiring FORWARD_API_KEY.
+// Used by CLI subcommands (install-ca, uninstall-ca).
+//
+// (FORWARD_API_KEY gerektirmeden çevre değişkenlerine göre CA sertifika ve
+// anahtar dosya yollarını döner. CLI alt-komutları tarafından kullanılır.)
+func CACertPaths() (certPath, keyPath string) {
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".ai-firewall")
+	if v := os.Getenv("MITM_CERT_DIR"); v != "" {
+		dir = v
+	}
+	return filepath.Join(dir, "ca.crt"), filepath.Join(dir, "ca.key")
+}
+
 // LoadForTest returns a Config suitable for unit tests without requiring
 // any environment variables to be set.
 // (Birim testleri için herhangi bir ortam değişkeni ayarlamadan uygun bir Config döner.)

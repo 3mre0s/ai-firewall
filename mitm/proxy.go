@@ -472,6 +472,38 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 	// ── Step 3: Unmask and deliver the response ───────────────────────────
 	// (Adım 3: Yanıtın maskesini kaldır ve ilet)
 
+	// Check if this is a streaming response (SSE).
+	// (Bu bir akış yanıtı mı (SSE)?)
+	isStream := false
+	if contentType := resp.Header.Get("Content-Type"); strings.Contains(contentType, "text/event-stream") {
+		isStream = true
+	}
+
+	// Unmasking changes body length (placeholders are swapped for real secret
+	// values of different size), so the upstream's Content-Length no longer
+	// describes what we actually send. For standard responses we buffer the
+	// unmasked body and compute a correct Content-Length. For streaming
+	// responses the final length is unknowable up front, so we re-frame the
+	// body with our own "Transfer-Encoding: chunked" instead of forwarding
+	// whatever framing the upstream used.
+	//
+	// (Maskeleme kaldırma, gövde uzunluğunu değiştirir (yer tutucular, farklı
+	//  boyuttaki gerçek sır değerleriyle değiştirilir), bu yüzden upstream'in
+	//  Content-Length'i artık gönderdiğimiz şeyi tanımlamaz. Standart yanıtlar
+	//  için maskesi kaldırılmış gövdeyi arabelleğe alıp doğru bir Content-Length
+	//  hesaplıyoruz. Akış yanıtları için son uzunluk önceden bilinemediğinden,
+	//  gövdeyi upstream'in kullandığı çerçeveleme yerine kendi
+	//  "Transfer-Encoding: chunked" çerçevelememizle yeniden çerçeveliyoruz.)
+	var standardBody []byte
+	if !isStream {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[mitm][error] read response body failed: %v", err)
+			return
+		}
+		standardBody = []byte(p.masker.Unmask(string(raw)))
+	}
+
 	// Write response status line.
 	// (Yanıt durum satırını yaz.)
 	text := fmt.Sprintf("HTTP/1.1 %03d %s\r\n", resp.StatusCode, resp.Status)
@@ -480,13 +512,16 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 		return
 	}
 
-	// Copy response headers to the client.
-	// (Yanıt başlıklarını istemciye kopyala.)
+	// Copy response headers to the client, skipping hop-by-hop headers and
+	// any framing headers (Content-Length/Transfer-Encoding) — those are
+	// recomputed below to match what we actually send.
+	// (Yanıt başlıklarını istemciye kopyala; atlama-başına başlıkları ve
+	//  herhangi bir çerçeveleme başlığını (Content-Length/Transfer-Encoding)
+	//  atla — bunlar, gerçekten gönderdiğimiz şeyle eşleşmesi için aşağıda
+	//  yeniden hesaplanır.)
 	for key, values := range resp.Header {
-		// Skip hop-by-hop headers.
-		// (Atlama-başına başlıklarını atla.)
 		switch key {
-		case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "TE", "Trailers", "Transfer-Encoding", "Upgrade":
+		case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "TE", "Trailers", "Transfer-Encoding", "Upgrade", "Content-Length":
 			continue
 		}
 		for _, value := range values {
@@ -498,6 +533,18 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 		}
 	}
 
+	if isStream {
+		if _, err := tlsConn.Write([]byte("Transfer-Encoding: chunked\r\n")); err != nil {
+			log.Printf("[mitm][error] write transfer-encoding header failed: %v", err)
+			return
+		}
+	} else {
+		if _, err := fmt.Fprintf(tlsConn, "Content-Length: %d\r\n", len(standardBody)); err != nil {
+			log.Printf("[mitm][error] write content-length header failed: %v", err)
+			return
+		}
+	}
+
 	// End of headers.
 	// (Başlıkların sonu.)
 	if _, err := tlsConn.Write([]byte("\r\n")); err != nil {
@@ -505,36 +552,14 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 		return
 	}
 
-	// Check if this is a streaming response (SSE).
-	// (Bu bir akış yanıtı mı (SSE)?)
-	isStream := false
-	if contentType := resp.Header.Get("Content-Type"); strings.Contains(contentType, "text/event-stream") {
-		isStream = true
-	}
-
 	if isStream {
 		// Handle streaming response with chunk-by-chunk unmasking.
 		// (Akış yanıtını parça parça maskeleme kaldırma ile işle.)
 		p.handleStreamResponse(tlsConn, resp.Body)
 	} else {
-		// Handle standard response.
-		// (Standart yanıtı işle.)
-		p.handleStandardResponse(tlsConn, resp.Body)
-	}
-}
-
-// handleStandardResponse reads the entire response, unmasks it, and writes to client.
-// (Tüm yanıtı okur, maskesini kaldırır ve istemciye yazar.)
-func (p *MITMProxy) handleStandardResponse(conn *tls.Conn, body io.Reader) {
-	raw, err := io.ReadAll(body)
-	if err != nil {
-		log.Printf("[mitm][error] read response body failed: %v", err)
-		return
-	}
-
-	unmasked := p.masker.Unmask(string(raw))
-	if _, err := conn.Write([]byte(unmasked)); err != nil {
-		log.Printf("[mitm][error] write unmasked response failed: %v", err)
+		if _, err := tlsConn.Write(standardBody); err != nil {
+			log.Printf("[mitm][error] write unmasked response failed: %v", err)
+		}
 	}
 }
 
@@ -572,7 +597,7 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader) {
 				return
 			}
 			if out != "" {
-				if _, err := conn.Write([]byte(out)); err != nil {
+				if err := writeChunk(conn, []byte(out)); err != nil {
 					log.Printf("[mitm][error] write stream chunk failed: %v", err)
 					return
 				}
@@ -594,8 +619,30 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader) {
 		return
 	}
 	if tail != "" {
-		if _, err := conn.Write([]byte(tail)); err != nil {
+		if err := writeChunk(conn, []byte(tail)); err != nil {
 			log.Printf("[mitm][error] write final stream chunk failed: %v", err)
+			return
 		}
 	}
+
+	// Terminating chunk — signals end of body under chunked transfer encoding.
+	// (Sonlandırma chunk'ı — chunked transfer encoding altında gövdenin sonunu bildirir.)
+	if _, err := conn.Write([]byte("0\r\n\r\n")); err != nil {
+		log.Printf("[mitm][error] write final chunk terminator failed: %v", err)
+	}
+}
+
+// writeChunk writes data as a single HTTP/1.1 chunked-transfer-encoding chunk:
+// the size in hex, CRLF, the data itself, then a trailing CRLF.
+// (Veriyi tek bir HTTP/1.1 chunked-transfer-encoding parçası olarak yazar:
+//  onaltılık boyut, CRLF, verinin kendisi, ardından sonda CRLF.)
+func writeChunk(conn *tls.Conn, data []byte) error {
+	if _, err := fmt.Fprintf(conn, "%x\r\n", len(data)); err != nil {
+		return err
+	}
+	if _, err := conn.Write(data); err != nil {
+		return err
+	}
+	_, err := conn.Write([]byte("\r\n"))
+	return err
 }

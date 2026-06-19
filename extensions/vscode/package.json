@@ -7,11 +7,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/localai/firewall.git",
+    "url": "https://github.com/3mre0s/ai_firewall.git",
     "directory": "extensions/vscode"
   },
   "bugs": {
-    "url": "https://github.com/localai/firewall/issues"
+    "url": "https://github.com/3mre0s/ai_firewall/issues"
   },
   "engines": {
     "vscode": "^1.88.0"
@@ -104,8 +104,8 @@
         },
         "localAiFirewall.autoStart": {
           "type": "boolean",
-          "default": false,
-          "description": "Start the firewall automatically when VS Code opens."
+          "default": true,
+          "description": "Start the firewall automatically when VS Code opens. Disable this if you prefer to start it manually."
         }
       }
     },

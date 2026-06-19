@@ -8,6 +8,52 @@
 
 ---
 
+|                          | Local AI Firewall | Typical cloud gateway (Lakera, Nightfall, Portkey…) |
+|--------------------------|--------------------|------------------------------------------------------|
+| Sends your data off-machine | No              | Yes — prompts pass through their servers              |
+| Install                 | Single binary, no account | Sign up, configure API keys, often SDK integration |
+| Cost                    | Free, AGPL-3.0     | Usage-based pricing                                   |
+| Works offline-first     | Yes                | No — depends on their service being up                |
+
+---
+
+![demo](docs/demo.gif)
+*Placeholder — replace with an asciinema recording or GIF of `ai-firewall` masking a real request before launch.*
+
+## Quickstart (3 steps)
+
+**1. Install binary**
+
+```bash
+# macOS
+brew install 3mre0s/ai-firewall/ai-firewall
+
+# Windows
+scoop bucket add ai-firewall https://github.com/3mre0s/scoop-bucket
+scoop install ai-firewall
+
+# Linux / manual
+curl -L https://github.com/3mre0s/ai_firewall/releases/latest/download/ai-firewall-linux-amd64.tar.gz | tar xz
+mv ai-firewall ~/.local/bin/
+```
+
+**2. Install VS Code extension**
+
+Download `local-ai-firewall.vsix` from the [latest release](../../releases/latest), then:
+
+```bash
+code --install-extension local-ai-firewall.vsix
+```
+
+**3. Start**
+
+- `Ctrl+Shift+P` → **Local AI Firewall: Set API Key**
+- `Ctrl+Shift+P` → **Local AI Firewall: Start**
+- `Ctrl+Shift+P` → **Local AI Firewall: Copy Agent Env** → paste in terminal
+- Run `claude`, `cursor`, or any AI coding tool
+
+---
+
 ## What makes it different
 
 Most secret-redaction tools ask you to reconfigure each client — change a base URL, run a Docker container, route through a hosted gateway. This one is built to disappear:
@@ -47,7 +93,20 @@ Secrets are masked on the way out and restored on the way back. The provider onl
 
 ### 1. Get the binary
 
-Download the archive for your platform from the [Releases](../../releases) page, extract it, and put `ai-firewall` on your `PATH`.
+**macOS / Linux (Homebrew):**
+
+```bash
+brew install 3mre0s/ai-firewall/ai-firewall
+```
+
+**Windows (Scoop):**
+
+```powershell
+scoop bucket add ai-firewall https://github.com/3mre0s/scoop-bucket
+scoop install ai-firewall
+```
+
+**Manual download:** grab the archive for your platform from the [Releases](../../releases) page, extract it, and put `ai-firewall` on your `PATH`.
 
 ```bash
 # Linux / macOS example
@@ -251,4 +310,10 @@ go vet ./...    # must report nothing
 
 ## License
 
-AGPL-3.0-or-later — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+This project is licensed under the **GNU Affero General Public License v3.0 or later** (AGPL-3.0-or-later) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+### Commercial licensing
+
+If the AGPL-3.0 terms are not compatible with your use case (e.g., you need to embed Local AI Firewall in a closed-source product or a hosted service without disclosing your source code), a separate commercial license is available.
+
+Commercial licensing inquiries should be kept private. Please reach out via the contact information on the maintainer's GitHub profile, or send a private message directly — do not open a public issue for commercial requests.

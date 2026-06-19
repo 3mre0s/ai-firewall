@@ -250,6 +250,11 @@ async function cmdCopyEnv() {
  * @param {vscode.ExtensionContext} ctx
  */
 async function firstRunWizard(ctx) {
+    // Check binary first — no point asking for an API key if the binary is missing.
+    // (Önce binary kontrolü — binary yokken API key istemek hayal kırıklığı yaratır.)
+    const binary = await resolveBinary(ctx);
+    if (!binary) return;
+
     const choice = await vscode.window.showInformationMessage(
         '🔥 Welcome to Local AI Firewall! Set your API key to protect AI prompts from leaking secrets.',
         { modal: false },
@@ -259,17 +264,10 @@ async function firstRunWizard(ctx) {
 
     await cmdSetApiKey();
 
-    // Only continue if a key was actually saved
+    // Only continue if a key was actually saved.
+    // (Yalnızca anahtar gerçekten kaydedildiyse devam et.)
     const saved = await secrets.get(SECRET_KEY);
     if (!saved) return;
-
-    const autoChoice = await vscode.window.showInformationMessage(
-        'Start the firewall automatically every time VS Code opens?',
-        'Yes, auto-start', 'No'
-    );
-    if (autoChoice === 'Yes, auto-start') {
-        await cfg().update('autoStart', true, vscode.ConfigurationTarget.Global);
-    }
 
     await cmdStart(ctx);
 }
@@ -339,7 +337,7 @@ async function resolveBinary(ctx) {
             return p;
         }
     } else if (action === 'Open Releases') {
-        vscode.env.openExternal(vscode.Uri.parse('https://github.com/localai/firewall/releases/latest'));
+        vscode.env.openExternal(vscode.Uri.parse('https://github.com/3mre0s/ai_firewall/releases/latest'));
     }
 
     return null;

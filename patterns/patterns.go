@@ -50,6 +50,46 @@ type SensitivePattern struct {
 	Validate func(string) bool
 }
 
+// validateLuhn implements the Luhn checksum used by credit card numbers.
+// s may contain spaces or dashes between digit groups; these are stripped
+// before validation. Rejects plain decimal numbers (timestamps, byte counts,
+// schema constants like 9007199254740991) that happen to fall into 13-19
+// digit groups of 4 but aren't valid card numbers.
+// (s, hane grupları arasında boşluk veya tire içerebilir; bunlar doğrulamadan
+//  önce ayıklanır. Kredi kartı numarası OLMAYAN ama 4'lü gruplar halinde
+//  13-19 haneye denk gelen düz ondalık sayıları (zaman damgaları, bayt
+//  sayıları, 9007199254740991 gibi şema sabitleri) eler.)
+func validateLuhn(s string) bool {
+	d := make([]int, 0, 19)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '-' {
+			continue
+		}
+		if c < '0' || c > '9' {
+			return false
+		}
+		d = append(d, int(c-'0'))
+	}
+	if len(d) < 13 || len(d) > 19 {
+		return false
+	}
+	sum := 0
+	double := false
+	for i := len(d) - 1; i >= 0; i-- {
+		v := d[i]
+		if double {
+			v *= 2
+			if v > 9 {
+				v -= 9
+			}
+		}
+		sum += v
+		double = !double
+	}
+	return sum%10 == 0
+}
+
 // ── National ID checksum validators (Ulusal Kimlik sağlama doğrulayıcıları) ────
 
 // validateCPF implements the Brazilian CPF two-check-digit weighted mod-11 algorithm.
@@ -430,11 +470,20 @@ var Registry = []SensitivePattern{
 	},
 	{
 		// Windows absolute paths: C:\Users\alice\project
-		// (Windows mutlak yolları)
-		Name:   "Windows Absolute Path (Windows Mutlak Yol)",
-		Type:   TypePath,
-		Regex:  regexp.MustCompile(`[A-Za-z]:\\(?:[^\\/:\*\?"<>|\n]+\\)+[^\\/:\*\?"<>|\n]*`),
-		Prefix: "WIN_PATH",
+		// The drive letter must stand alone (preceded by start-of-string or a
+		// non-alphanumeric character) — otherwise this matches the tail of an
+		// ordinary word followed by a JSON-escaped colon/backslash sequence,
+		// e.g. "output:\n{" inside a JSON string, corrupting the JSON.
+		// (Windows mutlak yolları. Sürücü harfi tek başına durmalı (dizinin
+		//  başında veya alfanümerik olmayan bir karakterden sonra) — aksi
+		//  halde bu, sıradan bir kelimenin sonu ile JSON kaçışlı iki nokta/
+		//  ters eğik çizgi dizisini eşleştirir, örn. bir JSON dizesi içindeki
+		//  "output:\n{", JSON'u bozar.)
+		Name:       "Windows Absolute Path (Windows Mutlak Yol)",
+		Type:       TypePath,
+		Regex:      regexp.MustCompile(`(?:^|[^A-Za-z0-9])([A-Za-z]:\\(?:[^\\/:\*\?"<>|\n]+\\)+[^\\/:\*\?"<>|\n]*)`),
+		Prefix:     "WIN_PATH",
+		GroupIndex: 1,
 	},
 
 	// ── PII — Personally Identifiable Information (Kişisel Tanımlanabilir Bilgi) ─
@@ -449,10 +498,11 @@ var Registry = []SensitivePattern{
 		// Matches credit card numbers with optional spaces/dashes between groups.
 		// Covers Visa (13-19 digits), Mastercard (16), Amex (15), Discover (16-19).
 		// (Gruplar arasında isteğe bağlı boşluk/tire ile kredi kartı numaralarını eşleştirir.)
-		Name:   "Credit Card Number (Kredi Kartı Numarası)",
-		Type:   TypePII,
-		Regex:  regexp.MustCompile(`\b(?:\d{4}[\s\-]?){3}\d{1,4}\b`),
-		Prefix: "CC",
+		Name:     "Credit Card Number (Kredi Kartı Numarası)",
+		Type:     TypePII,
+		Regex:    regexp.MustCompile(`\b(?:\d{4}[\s\-]?){3}\d{1,4}\b`),
+		Prefix:   "CC",
+		Validate: validateLuhn,
 	},
 	{
 		// Turkish IBAN: TR + 2 check digits + 22 account digits (total 26 chars).

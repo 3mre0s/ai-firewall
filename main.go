@@ -39,7 +39,7 @@ import (
 var version = "dev"
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
+	log.SetFlags(log.LstdFlags)
 
 	// ── Subcommand dispatch (alt-komut yönlendirmesi) ─────────────────────────
 	// Must run before config.Load() so CLI commands never require FORWARD_API_KEY.
@@ -98,7 +98,7 @@ func main() {
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.ListenPort),
 		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
+		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 6 * time.Minute, // must exceed longest AI response (en uzun AI yanıtını aşmalı)
 		IdleTimeout:  60 * time.Second,
 	}
@@ -177,15 +177,17 @@ func main() {
 	// Shutdown MITM proxy server if it was running.
 	// (MITM proxy sunucusunu kapat, çalışıyorsa.)
 	if mitmServer != nil {
-		if err := mitmServer.Shutdown(shutCtx); err != nil {
+		mitmCtx, mitmCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer mitmCancel()
+		if err := mitmServer.Shutdown(mitmCtx); err != nil {
 			log.Printf("[firewall][warn] MITM server graceful shutdown timed out: %v", err)
 		}
 	}
 
 	// ── Adım 2: Vault artık boşta — silmek güvenli ───────────────────────────
 	// (Step 2: Vault is now idle — safe to wipe sensitive data from memory.)
-	v.Reset()
 	finalStats := v.Stats()
+	v.Reset()
 	log.Printf("[firewall][info] vault cleared — final stats: %+v", finalStats)
 	log.Printf("[firewall][info] metrics snapshot: %+v", metrics.Global.Snapshot(nil))
 	log.Println("[firewall][info] goodbye.")
@@ -227,22 +229,6 @@ func localhostOnly(next http.HandlerFunc) http.HandlerFunc {
 // CLI subcommand handlers (CLI alt-komut işleyicileri)
 // ════════════════════════════════════════════════════════════════════════════
 
-// caCertPaths resolves the CA certificate and key paths from environment
-// variables, mirroring config.Load() logic but without requiring FORWARD_API_KEY.
-// Respects MITM_CERT_DIR; falls back to ~/.ai-firewall.
-//
-// (FORWARD_API_KEY gerektirmeden config.Load() mantığını yansıtarak çevre
-// değişkenlerinden CA sertifika ve anahtar yollarını çözer.
-// MITM_CERT_DIR'ı dikkate alır; varsayılan ~/.ai-firewall'dır.)
-func caCertPaths() (certPath, keyPath string) {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".ai-firewall")
-	if v := os.Getenv("MITM_CERT_DIR"); v != "" {
-		dir = v
-	}
-	return filepath.Join(dir, "ca.crt"), filepath.Join(dir, "ca.key")
-}
-
 // runInstallCA generates the CA if it does not exist yet, then installs it
 // into the OS trust store. Idempotent: exits cleanly if already installed.
 // Returns 0 on success, 1 on error.
@@ -250,7 +236,7 @@ func caCertPaths() (certPath, keyPath string) {
 // (CA henüz yoksa oluşturur, ardından işletim sistemi güven deposuna kurar.
 // Idempotent: zaten kuruluysa temiz çıkış yapar. Başarıda 0, hatada 1 döner.)
 func runInstallCA() int {
-	certPath, keyPath := caCertPaths()
+	certPath, keyPath := config.CACertPaths()
 
 	// Generate the CA if the cert file does not exist yet.
 	// LoadOrCreateCA is idempotent: loads from disk when files exist, creates otherwise.
@@ -290,7 +276,7 @@ func runInstallCA() int {
 // (AI Firewall CA'sını işletim sistemi güven deposundan kaldırır.
 // Başarıda (veya kurulu değilse) 0, hatada 1 döner.)
 func runUninstallCA() int {
-	certPath, _ := caCertPaths()
+	certPath, _ := config.CACertPaths()
 
 	if !mitm.CheckInstalled() {
 		fmt.Println("CA is not currently installed in the system trust store. Nothing to do.")
@@ -347,29 +333,43 @@ func printBanner(cfg *config.Config) {
 		hint = "auto-detect"
 	}
 
-	// Build banner with or without MITM info.
-	// (MITM bilgisi ile veya olmadan banner oluştur.)
-	var mitmLines string
-	if cfg.MITMEnabled {
-		mitmLines = fmt.Sprintf("║  MITM Proxy                : :%d\n║  MITM CA Cert              : ~/.ai-firewall/ca.crt\n", cfg.MITMPort)
+	const inner = 60 // inner box width in ASCII runes (kutu iç genişliği — ASCII rune)
+	line := func(label, value string) string {
+		content := fmt.Sprintf("  %-26s: %s", label, value)
+		if pad := inner - len(content); pad > 0 {
+			content += strings.Repeat(" ", pad)
+		}
+		return "║" + content + "║"
 	}
 
-	banner := fmt.Sprintf(`
-╔══════════════════════════════════════════════╗
-║         🔥  Local AI Firewall                ║
-╠══════════════════════════════════════════════╣
-║  Listen                    : :%d
-║  Upstream                  : %s
-║  Provider                  : %s
-║  Mask paths                : %v
-║  Mask emails               : %v
-║  Vault limit               : %d entries
-║  Log level                 : %s
-║  Metrics                   : http://localhost:%d/metrics
-║  Dashboard                 : http://localhost:%d/dashboard
-%s╚══════════════════════════════════════════════╝
-`,
-		cfg.ListenPort, cfg.UpstreamURL, hint,
-		cfg.MaskPaths, cfg.MaskEmails, cfg.VaultSizeLimit, cfg.LogLevel, cfg.ListenPort, cfg.ListenPort, mitmLines)
-	fmt.Print(banner)
+	border := "╔" + strings.Repeat("═", inner) + "╗"
+	middle := "╠" + strings.Repeat("═", inner) + "╣"
+	bottom := "╚" + strings.Repeat("═", inner) + "╝"
+	// title: visual width of "🔥  Local AI Firewall" = 21 (emoji=2); (60-21)/2 = 19 left, 20 right
+	title := "║" + strings.Repeat(" ", 19) + "🔥  Local AI Firewall" + strings.Repeat(" ", 20) + "║"
+
+	// Build banner with or without MITM info.
+	// (MITM bilgisi ile veya olmadan banner oluştur.)
+	rows := []string{
+		border, title, middle,
+		line("Listen", fmt.Sprintf(":%d", cfg.ListenPort)),
+		line("Upstream", cfg.UpstreamURL),
+		line("Provider", hint),
+		line("Mask paths", fmt.Sprintf("%v", cfg.MaskPaths)),
+		line("Mask emails", fmt.Sprintf("%v", cfg.MaskEmails)),
+		line("Vault limit", fmt.Sprintf("%d entries", cfg.VaultSizeLimit)),
+		line("Log level", cfg.LogLevel),
+		line("Metrics", fmt.Sprintf("http://localhost:%d/metrics", cfg.ListenPort)),
+		line("Dashboard", fmt.Sprintf("http://localhost:%d/dashboard", cfg.ListenPort)),
+	}
+	if cfg.MITMEnabled {
+		rows = append(rows,
+			line("MITM Proxy", fmt.Sprintf(":%d", cfg.MITMPort)),
+			line("MITM CA Cert", "~/.ai-firewall/ca.crt"),
+		)
+	}
+	rows = append(rows, bottom)
+
+	fmt.Println()
+	fmt.Println(strings.Join(rows, "\n"))
 }

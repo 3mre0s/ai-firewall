@@ -80,6 +80,15 @@ type Config struct {
 	// MITMCertDir — directory for CA cert/key storage.
 	// Default: ~/.ai-firewall
 	MITMCertDir string
+
+	// AnalyticsOptIn — whether to send an anonymous startup ping to PostHog.
+	// The ping contains only: a random installation ID, build version, OS, and
+	// arch. No prompt content, secrets, or PII are ever sent.
+	// Telemetry is opt-in: this is false unless the operator explicitly sets
+	// ANALYTICS_OPT_IN=true. The API key is compiled in at build time, so
+	// local dev builds (without the CI secret) will always skip sending.
+	// Default: false
+	AnalyticsOptIn bool
 }
 
 // Load reads every setting from the environment and returns a validated Config.
@@ -110,6 +119,7 @@ func load(getenv func(string) string) (*Config, error) {
 		MITMEnabled:    envBool(getenv, "MITM_ENABLED", false),
 		MITMPort:       envInt(getenv, "MITM_PORT", 8082),
 		MITMCertDir:    envStr(getenv, "MITM_CERT_DIR", defaultCertDir),
+		AnalyticsOptIn: envBool(getenv, "ANALYTICS_OPT_IN", false),
 	}
 
 	// Validation (doğrulama) ────────────────────────────────────────────────

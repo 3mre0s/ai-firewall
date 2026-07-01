@@ -1,6 +1,6 @@
 # Local AI Firewall
 
-**Your secrets never leave your machine when you use AI coding tools.** A local proxy that strips API keys, passwords, and personal data out of your prompts before they reach Claude, OpenAI, Gemini, or any other provider — and restores them in the responses. No cloud, no account, no telemetry.
+**Your secrets never leave your machine when you use AI coding tools.** A local proxy that strips API keys, passwords, and personal data out of your prompts before they reach Claude, OpenAI, Gemini, or any other provider — and restores them in the responses. No cloud, no account. Telemetry is disabled by default and opt-in only.
 
 [![Go](https://img.shields.io/badge/go-1.22+-blue)](#build-from-source)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
@@ -18,7 +18,7 @@
 ---
 
 ![demo](docs/demo.gif)
-
+*Placeholder — replace with an asciinema recording or GIF of `ai-firewall` masking a real request before launch.*
 
 ## Quickstart (3 steps)
 
@@ -59,7 +59,7 @@ code --install-extension local-ai-firewall.vsix
 Most secret-redaction tools ask you to reconfigure each client — change a base URL, run a Docker container, route through a hosted gateway. This one is built to disappear:
 
 - **Zero configuration** — transparent MITM mode intercepts HTTPS directly. Install the local CA once with a single command, and every AI tool on your machine is protected without touching its settings.
-- **Zero telemetry** — nothing phones home. No account, no cloud component, no usage tracking. The metrics dashboard is bound to localhost and refuses any non-loopback request.
+- **Telemetry off by default** — nothing phones home unless you set `ANALYTICS_OPT_IN=true` *and* run an official release binary (self-built binaries never send telemetry). No account, no cloud component. When enabled, only a random install ID, version, OS, and arch are sent — never prompts, secrets, or paths. The metrics dashboard is bound to localhost and refuses any non-loopback request.
 - **Single static binary** — no runtime, no dependencies, no container. Download one file and run it. Cross-compiled for Linux, macOS, and Windows.
 - **Secrets stay in memory** — the token-to-secret mapping lives in an in-memory vault that is never written to disk and is wiped on shutdown.
 
@@ -264,12 +264,16 @@ The in-memory vault is cleared on graceful shutdown (`SIGINT` / `SIGTERM`). In-f
 
 ## Build from source
 
-Requires Go 1.22 or later.
+Requires Go 1.22 or later. No external dependencies — the build works offline after cloning.
 
 ```bash
 git clone https://github.com/3mre0s/ai_firewall.git
 cd ai_firewall
-go build -o ai-firewall .
+go build -trimpath -ldflags "-s -w" -o ai-firewall .
+
+# Run (FORWARD_API_KEY is required; use "none" for passthrough mode)
+export FORWARD_API_KEY="sk-ant-..."   # your real provider key
+./ai-firewall
 ```
 
 ---
@@ -305,6 +309,22 @@ Contributions are welcome. Please open an issue before starting a large change.
 go test ./...   # must pass
 go vet ./...    # must report nothing
 ```
+
+---
+
+## Telemetry
+
+Disabled by default. **Two conditions must both be true** to send anything:
+
+1. You set `ANALYTICS_OPT_IN=true`
+2. You are running an official release binary — self-built binaries never send telemetry because no API key is compiled in
+
+If you build from source (including `go install`), condition 2 is never met, so nothing is ever sent regardless of `ANALYTICS_OPT_IN`.
+
+**Sent** (only when both conditions are true): a random install ID, version, OS, arch.  
+**Never sent**: prompts, secrets, file paths, environment variables, or anything passing through the masking pipeline.
+
+The install ID is a random hex string generated with `crypto/rand` and stored in `~/.ai-firewall/telemetry_id`. It has no relation to your identity, machine, or network address. Analytics backend: PostHog (EU region).
 
 ---
 

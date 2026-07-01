@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +37,41 @@ func TestDisabledSendsNoRequest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, idFileName)); !os.IsNotExist(err) {
 		t.Fatal("expected no anon-id file to be written when telemetry is disabled")
+	}
+}
+
+// TestNoAPIKeySkipsSilently verifies that opting in without a compiled-in
+// key sends nothing — guards against local dev builds where the secret is absent.
+func TestNoAPIKeySkipsSilently(t *testing.T) {
+	t.Parallel()
+
+	var called int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = 1
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var logs []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, format)
+	}
+
+	cfg := Config{Enabled: true, Endpoint: srv.URL, APIKey: "", DataDir: t.TempDir()}
+	SendStartupEvent(cfg, "1.0.0-test", logf)
+
+	time.Sleep(100 * time.Millisecond)
+
+	if called != 0 {
+		t.Fatal("expected no HTTP request when API key is empty")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logs) == 0 {
+		t.Fatal("expected a diagnostic log line when API key is missing")
 	}
 }
 
@@ -116,14 +152,17 @@ func TestAnonIDPersistsAcrossRuns(t *testing.T) {
 		t.Fatalf("expected stable anon id across runs, got %q then %q", id1, id2)
 	}
 
-	// File must not be world/group readable — even though it contains no
-	// personal data, it's still a stable cross-run identifier.
-	info, err := os.Stat(filepath.Join(dir, idFileName))
-	if err != nil {
-		t.Fatalf("unexpected error stat-ing id file: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("expected telemetry_id mode 0600, got %o", perm)
+	// File must not be world/group readable on Unix — even though it contains
+	// no personal data, it's still a stable cross-run identifier.
+	// Windows does not support POSIX permission bits, so we skip this check.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dir, idFileName))
+		if err != nil {
+			t.Fatalf("unexpected error stat-ing id file: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("expected telemetry_id mode 0600, got %o", perm)
+		}
 	}
 }
 

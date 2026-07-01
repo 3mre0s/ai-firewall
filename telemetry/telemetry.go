@@ -74,6 +74,12 @@ func SendStartupEvent(cfg Config, version string, logf Logf) {
 		logf("[telemetry] enabled but no endpoint configured — skipping")
 		return
 	}
+	// Key is compiled in by CI; if missing, the binary was built locally
+	// without the secret and telemetry cannot be attributed to a project.
+	if cfg.APIKey == "" {
+		logf("[telemetry] enabled but no API key compiled in — skipping")
+		return
+	}
 
 	// Fire-and-forget: a slow or unreachable analytics endpoint must never
 	// delay startup or hold the process open.

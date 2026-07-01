@@ -30,6 +30,7 @@ import (
 	"github.com/3mre0s/ai_firewall/metrics"
 	"github.com/3mre0s/ai_firewall/mitm"
 	"github.com/3mre0s/ai_firewall/proxy"
+	"github.com/3mre0s/ai_firewall/telemetry"
 	"github.com/3mre0s/ai_firewall/vault"
 )
 
@@ -37,6 +38,11 @@ import (
 // Falls back to "dev" for local builds without ldflags.
 // (Derleme sırasında -ldflags ile ayarlanır; ldflags kullanılmazsa "dev" değerini alır.)
 var version = "dev"
+
+// analyticsKey is the PostHog project API key, compiled in by CI via
+// -ldflags "-X main.analyticsKey=phc_...". Empty in local dev builds,
+// which causes telemetry to skip silently even when ANALYTICS_OPT_IN=true.
+var analyticsKey = ""
 
 func main() {
 	log.SetFlags(log.LstdFlags)
@@ -65,6 +71,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("[fatal] config error: %v\n", err)
 	}
+
+	// ── 1b. Telemetry (Anonim Başlangıç Sinyali) ─────────────────────────────
+	// Fires only when ANALYTICS_OPT_IN=true AND analyticsKey is compiled in.
+	// No prompt content, secrets, or PII are ever sent.
+	// (Yalnızca ANALYTICS_OPT_IN=true ve analyticsKey derlenmiş olduğunda çalışır.
+	//  Prompt içeriği, secret veya kişisel veri asla gönderilmez.)
+	telemetry.SendStartupEvent(telemetry.Config{
+		Enabled:  cfg.AnalyticsOptIn,
+		Endpoint: "https://eu.i.posthog.com/capture/",
+		APIKey:   analyticsKey,
+		DataDir:  cfg.MITMCertDir,
+	}, version, log.Printf)
 
 	// ── 2. Vault (Kasa) ───────────────────────────────────────────────────────
 	// The vault lives for the entire process lifetime.

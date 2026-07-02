@@ -18,7 +18,7 @@
 ---
 
 ![demo](docs/demo.gif)
-
+*`ai-firewall` masking a real request before launch.*
 
 ## Quickstart (3 steps)
 

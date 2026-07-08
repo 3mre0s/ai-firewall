@@ -47,11 +47,20 @@ type Config struct {
 	// Required (or "none" for passthrough mode).
 	ForwardAPIKey string
 
-	// VaultSizeLimit — max number of label→value entries held in memory per session.
-	// Prevents unbounded RAM growth on very long conversations.
-	// (Oturum başına bellekte tutulan maksimum etiket→değer giriş sayısı.
-	//  Çok uzun konuşmalarda sınırsız RAM büyümesini önler.)
-	// Default: 1000
+	// VaultSizeLimit — max number of label→value entries held in memory per
+	// vault. In the Open WebUI adapter each user gets their own vault, so this
+	// bounds PER-USER secret capacity, and the vault's pre-sized map is the main
+	// driver of per-user memory (heap ≈ VAULT_MAX_USERS × f(VaultSizeLimit)).
+	//
+	// Note the vault does not deduplicate a value across separate requests, so a
+	// long session grows the vault roughly by masked-values-per-message, not by
+	// distinct secrets. Default lowered from 1000 to 200: 1000 cost ~57 KB/user
+	// (~560 MB for 10k users) while 200 costs ~10 KB/user (~99 MB) yet still
+	// leaves ~2× the headroom of 100 before a user trips masking_failed_vault_full
+	// mid-conversation. Tune up for heavy sessions, down for tiny VMs.
+	// (Adapter'da her kullanıcının kendi vault'u olduğundan bu, KULLANICI BAŞINA
+	//  sır kapasitesini sınırlar ve per-user belleğin ana etkenidir.)
+	// Default: 200
 	VaultSizeLimit int
 
 	// MaskPaths — whether to detect and mask Unix/Windows file-system paths.
@@ -112,7 +121,7 @@ func load(getenv func(string) string) (*Config, error) {
 		UpstreamURL:    envStr(getenv, "UPSTREAM_URL", "https://api.anthropic.com"),
 		ProviderHint:   envStr(getenv, "PROVIDER_HINT", ""),
 		ForwardAPIKey:  envStr(getenv, "FORWARD_API_KEY", ""),
-		VaultSizeLimit: envInt(getenv, "VAULT_SIZE_LIMIT", 1000),
+		VaultSizeLimit: envInt(getenv, "VAULT_SIZE_LIMIT", 200),
 		MaskPaths:      envBool(getenv, "MASK_PATHS", true),
 		MaskEmails:     envBool(getenv, "MASK_EMAILS", true),
 		LogLevel:       envStr(getenv, "LOG_LEVEL", "info"),
@@ -146,20 +155,20 @@ func load(getenv func(string) string) (*Config, error) {
 	// (ProviderHint isteğe bağlıdır; yalnızca açıkça ayarlandığında doğrula.)
 	if cfg.ProviderHint != "" {
 		validHints := map[string]bool{
-			"anthropic":   true,
-			"openai":      true,
-			"gemini":      true,
-			"groq":        true,
-			"together":    true,
-			"perplexity":  true,
-			"mistral":     true,
-			"cohere":      true,
-			"deepseek":    true,
-			"xai":         true,
-			"ollama":      true,
-			"lmstudio":    true,
-			"azure":       true,
-			"generic":     true,
+			"anthropic":  true,
+			"openai":     true,
+			"gemini":     true,
+			"groq":       true,
+			"together":   true,
+			"perplexity": true,
+			"mistral":    true,
+			"cohere":     true,
+			"deepseek":   true,
+			"xai":        true,
+			"ollama":     true,
+			"lmstudio":   true,
+			"azure":      true,
+			"generic":    true,
 		}
 		if !validHints[strings.ToLower(cfg.ProviderHint)] {
 			return nil, fmt.Errorf(

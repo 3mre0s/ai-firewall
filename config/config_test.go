@@ -33,8 +33,8 @@ func TestLoadDefaultsAndRequired(t *testing.T) {
 	if cfg.ProviderHint != "" {
 		t.Errorf("expected default ProviderHint to be empty, got %q", cfg.ProviderHint)
 	}
-	if cfg.VaultSizeLimit != 1000 {
-		t.Errorf("expected default VaultSizeLimit = 1000, got %d", cfg.VaultSizeLimit)
+	if cfg.VaultSizeLimit != 200 {
+		t.Errorf("expected default VaultSizeLimit = 200, got %d", cfg.VaultSizeLimit)
 	}
 	if !cfg.MaskPaths {
 		t.Errorf("expected default MaskPaths = true")

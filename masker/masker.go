@@ -14,6 +14,7 @@ package masker
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -42,32 +43,80 @@ func New(v *vault.Vault, cfg *config.Config) *Masker {
 	return &Masker{
 		vault: v,
 		cfg:   cfg,
-		// Matches: [[PREFIX_8HEXDIGITS]]  e.g. [[GH_PAT_3F7A1B2C]]
+		// Matches: [[PREFIX_32HEXDIGITS]].
 		// (Örneğin [[GH_PAT_3F7A1B2C]] biçimindeki etiketleri eşleştirir.)
-		labelPattern: regexp.MustCompile(`\[\[[A-Z_]+_[0-9A-F]{8}\]\]`),
+		labelPattern: regexp.MustCompile(`\[\[[A-Z_]+_[0-9A-F]{32}\]\]`),
 	}
 }
 
 // ── Label generation (Etiket üretme) ─────────────────────────────────────────
 
+// randRead fills b with cryptographically secure random bytes. It is a package
+// variable so tests can simulate entropy failure — modern Go aborts the process
+// inside crypto/rand.Read itself, which cannot be triggered safely in a test.
+// (b'yi kriptografik olarak güvenli rastgele baytlarla doldurur. Paket değişkeni
+// olmasının nedeni testlerin entropi hatasını simüle edebilmesidir — modern Go,
+// crypto/rand.Read içinde süreci sonlandırır ve bu bir testte güvenle tetiklenemez.)
+var randRead = rand.Read
+
 // generateLabel returns a unique, bracket-delimited placeholder.
-// 4 random bytes → 8 hex digits → collision probability ≈ 1 in 4 billion.
-// (4 rastgele bayt → 8 onaltılık basamak → çarpışma olasılığı ≈ 4 milyarda 1.)
+// 16 random bytes → 32 hex digits, so collisions are negligible in practice.
+// (16 rastgele bayt → 32 onaltılık basamak → çarpışma olasılığı ihmal edilebilir.)
 //
-// Example output: [[SECRET_A4F0C8B2]]
-func generateLabel(prefix string) string {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is extremely rare; use a deterministic fallback
-		// so we never return an empty string.
-		// (crypto/rand hatası son derece nadirdir; asla boş dize dönmemek için
-		//  deterministik bir yedek kullanılır.)
-		b = []byte{0xDE, 0xAD, 0xC0, 0xDE}
+// A crypto/rand failure is returned as an error: a deterministic fallback label
+// would be shared by every secret, causing vault collisions and wrong values
+// being restored on Unmask. Callers treat the error like vault-full and the
+// request is blocked instead of forwarded (fail-closed).
+// (crypto/rand hatası, hata olarak döndürülür: deterministik bir yedek etiket
+//
+//	her sır için aynı olur, vault çakışmalarına ve Unmask'ta yanlış değerlerin
+//	geri yüklenmesine yol açar. Çağıranlar hatayı vault-dolu gibi ele alır ve
+//	istek iletilmek yerine engellenir — fail-closed.)
+//
+// Example output: [[SECRET_A4F0C8B2D9E1F203445566778899AABB]]
+func generateLabel(prefix string) (string, error) {
+	b := make([]byte, 16)
+	if _, err := randRead(b); err != nil {
+		return "", fmt.Errorf("generating label: %w", err)
 	}
-	return fmt.Sprintf("[[%s_%s]]", prefix, strings.ToUpper(hex.EncodeToString(b)))
+	return fmt.Sprintf("[[%s_%s]]", prefix, strings.ToUpper(hex.EncodeToString(b))), nil
+}
+
+func (m *Masker) storeWithFreshLabel(prefix, original string) (string, error) {
+	for range 8 {
+		label, err := generateLabel(prefix)
+		if err != nil {
+			return "", err
+		}
+		if err := m.vault.Store(label, original); err != nil {
+			if errors.Is(err, vault.ErrLabelExists) {
+				continue
+			}
+			return "", err
+		}
+		return label, nil
+	}
+	return "", vault.ErrLabelExists
 }
 
 // ── MaskResult (Maskeleme Sonucu) ─────────────────────────────────────────────
+
+// MaskMatch is a per-rule detection summary. One entry is produced for every
+// pattern in the registry that matched at least one value in the input,
+// including values that were detected but could NOT be masked because the
+// vault was full (fail-closed). It lets callers report exactly which rules
+// fired without exposing the sensitive values themselves.
+//
+// (Kural bazlı tespit özeti. Girdide en az bir değer eşleşen her desen için
+//
+//	bir giriş üretilir; vault dolu olduğu için maskelenemeyen (fail-closed)
+//	değerler de dahildir. Hassas değerleri ifşa etmeden hangi kuralların
+//	tetiklendiğini bildirmeyi sağlar.)
+type MaskMatch struct {
+	Type  patterns.PatternType // category, e.g. PII / TOKEN (kategori)
+	Rule  string               // human-readable pattern name (desen adı)
+	Count int                  // how many values this rule matched (kaç değer eşleşti)
+}
 
 // MaskResult is returned by Mask() and carries the sanitised text plus
 // a summary of what was found — useful for structured logging (yapısal loglama).
@@ -76,6 +125,9 @@ type MaskResult struct {
 	MaskedCount    int                          // total number of values that were replaced (değiştirilen toplam değer sayısı)
 	ByType         map[patterns.PatternType]int // breakdown by category (kategoriye göre dağılım)
 	VaultEvictions int
+	// Matches lists, per rule, what was detected (rule bazlı ne tespit edildiği).
+	// Purely additive metadata; existing callers can ignore it.
+	Matches []MaskMatch
 }
 
 // ── Mask (Maskeleme) ──────────────────────────────────────────────────────────
@@ -116,10 +168,32 @@ func (m *Masker) Mask(text string) MaskResult {
 			continue
 		}
 
+		// Snapshot counters so we can attribute exactly what THIS pattern found.
+		// (Bu desenin tam olarak neyi bulduğunu ilişkilendirmek için sayaçları
+		//  önceden yakala.)
+		beforeMasked := result.MaskedCount
+		beforeEvicted := result.VaultEvictions
+
 		if p.GroupIndex > 0 {
 			result.Text = m.maskGroup(result.Text, p, &result, seen)
 		} else {
 			result.Text = m.maskFull(result.Text, p, &result, seen)
+		}
+
+		// Record a per-rule match entry when this pattern detected anything,
+		// counting both masked values and vault-evicted (detected-but-unmasked)
+		// ones so blocked requests still report what was found.
+		// (Bu desen bir şey tespit ettiyse kural bazlı bir giriş kaydet;
+		//  maskelenen ve vault-dolu nedeniyle maskelenemeyen değerleri birlikte
+		//  say ki bloklanan istekler de neyin bulunduğunu bildirsin.)
+		masked := result.MaskedCount - beforeMasked
+		evicted := result.VaultEvictions - beforeEvicted
+		if masked+evicted > 0 {
+			result.Matches = append(result.Matches, MaskMatch{
+				Type:  p.Type,
+				Rule:  p.Name,
+				Count: masked + evicted,
+			})
 		}
 	}
 
@@ -139,9 +213,9 @@ func (m *Masker) maskFull(text string, p patterns.SensitivePattern, r *MaskResul
 			return existingLabel
 		}
 
-		label := generateLabel(p.Prefix)
-		if err := m.vault.Store(label, match); err != nil {
-			log.Printf("[WARN] vault full (kasa dolu) — %s left unmasked: %v", p.Name, err)
+		label, err := m.storeWithFreshLabel(p.Prefix, match)
+		if err != nil {
+			log.Printf("[WARN] masking failed (maskeleme başarısız) — %s left unmasked, request will be blocked: %v", p.Name, err)
 			metrics.Global.IncVaultEvictions()
 			r.VaultEvictions++
 			return match
@@ -177,10 +251,9 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 			return strings.Replace(match, value, existingLabel, 1)
 		}
 
-		label := generateLabel(p.Prefix)
-
-		if err := m.vault.Store(label, value); err != nil {
-			log.Printf("[WARN] vault full (kasa dolu) — %s left unmasked: %v", p.Name, err)
+		label, err := m.storeWithFreshLabel(p.Prefix, value)
+		if err != nil {
+			log.Printf("[WARN] masking failed (maskeleme başarısız) — %s left unmasked, request will be blocked: %v", p.Name, err)
 			metrics.Global.IncVaultEvictions()
 			r.VaultEvictions++
 			return match
@@ -237,6 +310,59 @@ func (m *Masker) HasSecrets(text string) bool {
 		}
 	}
 	return false
+}
+
+// ── Detect (Salt-okunur Tespit) ───────────────────────────────────────────────
+
+// Detect performs a read-only scan of text and reports which rules matched,
+// WITHOUT touching the vault or mutating any state. It applies the same
+// category toggles and semantic validators as Mask/HasSecrets.
+//
+// Use it on paths where masking must NOT occur but a per-rule breakdown of what
+// was found is still needed — e.g. inspecting model output for raw secrets that
+// were never routed through masking (a genuine leak). Vault labels emitted by
+// Mask never match any secret pattern, so they are not reported here.
+//
+// (Metni salt-okunur tarar ve hangi kuralların eşleştiğini bildirir; vault'a
+//
+//	dokunmaz, durumu değiştirmez. Mask/HasSecrets ile aynı kategori anahtarlarını
+//	ve doğrulayıcıları uygular. Maskelemenin yapılMAMASI gereken ama neyin
+//	bulunduğunun kural bazlı dökümüne ihtiyaç duyulan yollarda kullanılır.)
+func (m *Masker) Detect(text string) []MaskMatch {
+	var matches []MaskMatch
+	for _, p := range patterns.Registry {
+		if p.Type == patterns.TypePath && !m.cfg.MaskPaths {
+			continue
+		}
+		if p.Type == patterns.TypePII && !m.cfg.MaskEmails {
+			continue
+		}
+
+		count := 0
+		if p.GroupIndex > 0 {
+			for _, subs := range p.Regex.FindAllStringSubmatch(text, -1) {
+				if len(subs) <= p.GroupIndex {
+					continue
+				}
+				if p.Validate != nil && !p.Validate(subs[p.GroupIndex]) {
+					continue
+				}
+				count++
+			}
+		} else {
+			for _, match := range p.Regex.FindAllString(text, -1) {
+				if p.Validate != nil && !p.Validate(match) {
+					continue
+				}
+				count++
+			}
+		}
+
+		if count > 0 {
+			matches = append(matches, MaskMatch{Type: p.Type, Rule: p.Name, Count: count})
+		}
+	}
+	return matches
 }
 
 // ── Unmask (Maskeyi Kaldırma) ─────────────────────────────────────────────────

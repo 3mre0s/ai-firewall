@@ -18,8 +18,6 @@
 ---
 
 ![demo](docs/demo.gif)
-*Placeholder — replace with an asciinema recording or GIF of `ai-firewall` masking a real request before launch.*
-
 ## Quickstart (3 steps)
 
 **1. Install binary**

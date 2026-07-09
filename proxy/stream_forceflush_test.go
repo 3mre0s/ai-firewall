@@ -21,7 +21,7 @@ func TestStreamProcessorForceFlushNoSecretLeak(t *testing.T) {
 
 	m, v := newTestMaskerWithVault(1000)
 	secret := "super-secret-value-42"
-	label := "[[SECRET_A4F0C8B2]]"
+	label := "[[SECRET_A4F0C8B2D9E1F203445566778899AABB]]"
 	if err := v.Store(label, secret); err != nil {
 		t.Fatalf("vault.Store: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestStreamProcessorForceFlushThenComplete(t *testing.T) {
 
 	m, v := newTestMaskerWithVault(1000)
 	good := "recoverable-value-99"
-	goodLabel := "[[SECRET_BBBBBBBB]]"
+	goodLabel := "[[SECRET_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB]]"
 	if err := v.Store(goodLabel, good); err != nil {
 		t.Fatalf("vault.Store: %v", err)
 	}

@@ -118,6 +118,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── GET /v1/models — upstream passthrough for OpenAI-compatible clients ──
+	// Clients like Cline may call GET /v1/models on connect to discover
+	// available models.  No request body to mask — simple passthrough.
+	// (Cline gibi istemciler bağlantıda GET /v1/models çağırabilir.
+	//  Maskelenecek istek gövdesi yok — basit geçiş.)
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+		s.handleModelsPassthrough(w, r)
+		return
+	}
+
 	// Only POST requests reach AI endpoints; reject everything else early.
 	// (Yalnızca POST istekleri AI uç noktalarına ulaşır; diğerlerini erken reddet.)
 	if r.Method != http.MethodPost {
@@ -172,7 +182,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// ── Step 3: Forward the clean request upstream ───────────────────────────
 	// (Temiz isteği yukarı yönlü ilet)
-	
+
 	// SSRF Protection: Use r.URL.Path and r.URL.RawQuery strictly instead of
 	// r.URL.RequestURI() which might contain an absolute URI from a malicious client.
 	// (SSRF Koruması: Kötü niyetli bir istemciden gelen tam URL'leri engellemek için
@@ -252,6 +262,40 @@ func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader) {
 		metrics.Global.IncUnmaskedItems(int64(replaced))
 	}
 	w.Write([]byte(unmasked))
+}
+
+// handleModelsPassthrough forwards GET /v1/models to the upstream provider.
+// No request body to mask/unmask — this is a simple passthrough so
+// OpenAI-compatible clients can discover available models.
+//
+// (GET /v1/models isteğini upstream sağlayıcıya iletir.
+//
+//	Maskelenecek/çözülecek istek gövdesi yok — OpenAI uyumlu istemcilerin
+//	mevcut modelleri keşfedebilmesi için basit bir geçiş.)
+func (s *Server) handleModelsPassthrough(w http.ResponseWriter, r *http.Request) {
+	upstreamURL := s.cfg.UpstreamURL + r.URL.Path
+	upstreamReq, err := http.NewRequestWithContext(
+		r.Context(), http.MethodGet, upstreamURL, nil,
+	)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("cannot build upstream request: %v", err),
+			http.StatusInternalServerError)
+		return
+	}
+
+	s.copyRequestHeaders(r.Header, upstreamReq.Header)
+	s.provider.PrepareHeaders(upstreamReq.Header, s.cfg.ForwardAPIKey)
+
+	resp, err := s.client.Do(upstreamReq)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("upstream error: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	s.copyResponseHeaders(resp.Header, w.Header())
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // handleStream processes the SSE body chunk-by-chunk via streamProcessor.
@@ -341,7 +385,7 @@ var allowedRequestHeaders = []string{
 	"Anthropic-Version",
 	"Anthropic-Beta",
 	"Openai-Organization",
-	"Authorization",  // passthrough mode (FORWARD_API_KEY=none): client's Bearer token flows through
+	"Authorization", // passthrough mode (FORWARD_API_KEY=none): client's Bearer token flows through
 	"X-Api-Key",
 	"X-Goog-Api-Key",
 	"Api-Key",

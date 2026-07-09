@@ -21,11 +21,14 @@ func newTestMaskerWithVault(vaultLimit int) (*masker.Masker, *vault.Vault) {
 // handles vault labels that are split across two consecutive network chunks.
 //
 // Scenario (senaryo):
-//   chunk1: "Here is the value: [[SECRET_"
-//   chunk2: "A4F0C8B2]] — use wisely."
 //
-// The label [[SECRET_A4F0C8B2]] must be fully unmasked in the output.
-// (Etiket [[SECRET_A4F0C8B2]] çıktıda tam olarak maskelenmemiş olmalı.)
+//	chunk1: "Here is the value: [[SECRET_"
+//	chunk2: "A4F0C8B2D9E1F203445566778899AABB]] — use wisely."
+//
+// The label [[SECRET_A4F0C8B2D9E1F203445566778899AABB]] must be fully unmasked
+// in the output. Labels are 32 hex digits — the format emitted by generateLabel.
+// (Etiket çıktıda tam olarak maskelenmemiş olmalı. Etiketler 32 onaltılık
+// basamaktır — generateLabel'ın ürettiği biçim.)
 func TestStreamProcessorSplitChunk(t *testing.T) {
 	t.Parallel()
 
@@ -34,7 +37,7 @@ func TestStreamProcessorSplitChunk(t *testing.T) {
 
 	// Manually plant a label in the vault.
 	// (Etiketi vault'a elle yerleştir.)
-	label := "[[SECRET_A4F0C8B2]]"
+	label := "[[SECRET_A4F0C8B2D9E1F203445566778899AABB]]"
 	if err := v.Store(label, original); err != nil {
 		t.Fatalf("vault.Store: %v", err)
 	}
@@ -42,7 +45,7 @@ func TestStreamProcessorSplitChunk(t *testing.T) {
 	proc := NewStreamProcessor(m)
 
 	chunk1 := []byte("Here is the value: [[SECRET_")
-	chunk2 := []byte("A4F0C8B2]] — use wisely.")
+	chunk2 := []byte("A4F0C8B2D9E1F203445566778899AABB]] — use wisely.")
 
 	out1 := proc.Process(chunk1)
 	out2 := proc.Process(chunk2)
@@ -67,15 +70,16 @@ func TestStreamProcessorSplitChunk(t *testing.T) {
 // TestStreamProcessorMultipleSplits tests a chain of labels, some crossing
 // chunk boundaries, some within a single chunk.
 // (Bazıları chunk sınırlarını aşan, bazıları tek chunk içinde kalan
-//  bir etiket zincirini test eder.)
+//
+//	bir etiket zincirini test eder.)
 func TestStreamProcessorMultipleSplits(t *testing.T) {
 	t.Parallel()
 
 	m, v := newTestMaskerWithVault(1000)
 	labels := map[string]string{
-		"[[LABEL_AAAAAAAA]]": "value-alpha",
-		"[[LABEL_BBBBBBBB]]": "value-beta",
-		"[[LABEL_CCCCCCCC]]": "value-gamma",
+		"[[LABEL_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]]": "value-alpha",
+		"[[LABEL_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB]]": "value-beta",
+		"[[LABEL_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC]]": "value-gamma",
 	}
 	for lbl, val := range labels {
 		if err := v.Store(lbl, val); err != nil {
@@ -87,15 +91,19 @@ func TestStreamProcessorMultipleSplits(t *testing.T) {
 	// Then split it at arbitrary byte positions to simulate network chunking.
 	// (Etiketlerin çeşitli konumlarda olduğu SSE benzeri bir yanıt oluştur.
 	//  Ardından ağ parçalamasını simüle etmek için rastgele bayt konumlarında böl.)
-	full := "start [[LABEL_AAAAAAAA]] middle [[LABEL_BBBBBBBB]] end [[LABEL_CCCCCCCC]] done"
+	full := "start [[LABEL_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]] middle " +
+		"[[LABEL_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB]] end " +
+		"[[LABEL_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC]] done"
 
-	// Split at byte 15 and 45 to guarantee cross-boundary labels.
-	// (Sınır ötesi etiketleri garanti etmek için 15. ve 45. baytta böl.)
+	// Split at byte 20 (inside label A) and 60 (inside label B) to guarantee
+	// cross-boundary labels.
+	// (Sınır ötesi etiketleri garanti etmek için 20. baytta (A etiketinin içi)
+	//  ve 60. baytta (B etiketinin içi) böl.)
 	proc := NewStreamProcessor(m)
 	parts := [][]byte{
-		[]byte(full[:15]),
-		[]byte(full[15:45]),
-		[]byte(full[45:]),
+		[]byte(full[:20]),
+		[]byte(full[20:60]),
+		[]byte(full[60:]),
 	}
 
 	var sb strings.Builder

@@ -1,0 +1,34 @@
+# ===========================================================================
+# AI Firewall — Continue proxy-passthrough config (zero adapter code)
+# ===========================================================================
+# This is the STREAMING-PRESERVING integration path. It points Continue at the
+# AI Firewall *forward proxy* (an OpenAI-compatible endpoint), which masks the
+# request, forwards it to the real LLM, and stream-unmasks the response
+# token-by-token via the engine's StreamProcessor (safe-cutpoint incremental
+# unmask + raw-secret leak fail-fast). No custom code, no config.ts — Continue
+# just speaks OpenAI to a custom apiBase, and the engine does everything.
+#
+#   Continue → apiBase(firewall proxy :8080) → Mask() → LLM → Unmask() → Continue
+#
+# Start the proxy first (points at your real provider):
+#   UPSTREAM_URL=https://api.openai.com FORWARD_API_KEY=sk-... FIREWALL_PORT=8080 ./ai-firewall
+#
+# Then drop this into ~/.continue/config.yaml (or merge the `models:` entry).
+# ---------------------------------------------------------------------------
+
+name: ai-firewall-guarded
+version: 0.1.0
+schema: v1
+
+models:
+  - name: AI Firewall (Guarded, streaming)
+    provider: openai
+    model: gpt-4o
+    # The firewall proxy — NOT api.openai.com. The proxy injects the real key.
+    apiBase: http://localhost:8080/v1
+    # The proxy supplies the upstream key (FORWARD_API_KEY); this is a placeholder.
+    apiKey: local-firewall-placeholder
+    roles:
+      - chat
+      - edit
+      - apply

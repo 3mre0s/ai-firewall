@@ -11,11 +11,17 @@
 package vault
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/3mre0s/ai_firewall/metrics"
+)
+
+var (
+	ErrLimitReached = errors.New("vault limit reached")
+	ErrLabelExists  = errors.New("vault label already exists")
 )
 
 // Entry is a single record inside the Vault.
@@ -63,8 +69,12 @@ func (v *Vault) Store(label, original string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
+	if _, exists := v.entries[label]; exists {
+		return fmt.Errorf("%w: %s", ErrLabelExists, label)
+	}
+
 	if len(v.entries) >= v.limit {
-		return fmt.Errorf("vault limit reached: %d/%d", len(v.entries), v.limit)
+		return fmt.Errorf("%w: %d/%d", ErrLimitReached, len(v.entries), v.limit)
 	}
 
 	v.entries[label] = &Entry{

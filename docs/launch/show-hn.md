@@ -32,7 +32,7 @@ non-loopback request.
 It's AGPL-3.0-or-later, single static binary (Linux/macOS/Windows,
 amd64/arm64), available via Homebrew/Scoop or as a direct download.
 
-GitHub: https://github.com/3mre0s/ai_firewall
+GitHub: https://github.com/3mre0s/ai-firewall
 
 Feedback welcome, especially on pattern coverage (what's still leaking
 through) and the MITM trust model.

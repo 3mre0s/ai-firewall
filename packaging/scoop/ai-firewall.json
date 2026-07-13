@@ -1,23 +1,23 @@
 {
     "version": "1.0.0",
     "description": "Local proxy that strips secrets from AI prompts before they reach any provider",
-    "homepage": "https://github.com/3mre0s/ai_firewall",
+    "homepage": "https://github.com/3mre0s/ai-firewall",
     "license": "AGPL-3.0-or-later",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/3mre0s/ai_firewall/releases/download/v1.0.0/ai-firewall-windows-amd64.zip",
+            "url": "https://github.com/3mre0s/ai-firewall/releases/download/v1.0.0/ai-firewall-windows-amd64.zip",
             "hash": "REPLACE_WITH_WINDOWS_AMD64_SHA256",
             "extract_dir": ""
         }
     },
     "bin": "ai-firewall-windows-amd64.exe",
     "checkver": {
-        "github": "https://github.com/3mre0s/ai_firewall"
+        "github": "https://github.com/3mre0s/ai-firewall"
     },
     "autoupdate": {
         "architecture": {
             "64bit": {
-                "url": "https://github.com/3mre0s/ai_firewall/releases/download/v$version/ai-firewall-windows-amd64.zip"
+                "url": "https://github.com/3mre0s/ai-firewall/releases/download/v$version/ai-firewall-windows-amd64.zip"
             }
         }
     }

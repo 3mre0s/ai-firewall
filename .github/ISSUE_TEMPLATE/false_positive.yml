@@ -1,0 +1,35 @@
+name: False positive
+description: Report legitimate content that is masked unexpectedly
+title: "[False positive]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Submit only a minimal sanitized example. Do not include real secrets, credentials, tokens, customer data, file paths, or private repository content.
+  - type: textarea
+    id: example
+    attributes:
+      label: Minimal sanitized example
+      description: Reduce the input to the shortest safe text that still triggers masking.
+    validations:
+      required: true
+  - type: input
+    id: expected
+    attributes:
+      label: What should remain unchanged?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `ai-firewall version`.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed all real secrets, credentials, tokens, customer data, private paths, and private repository content.
+          required: true

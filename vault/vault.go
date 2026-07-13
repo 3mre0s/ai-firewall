@@ -11,11 +11,17 @@
 package vault
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/3mre0s/ai_firewall/metrics"
+)
+
+var (
+	ErrLimitReached = errors.New("vault limit reached")
+	ErrLabelExists  = errors.New("vault label already exists")
 )
 
 // Entry is a single record inside the Vault.
@@ -33,7 +39,8 @@ type Entry struct {
 // Vault is the central, process-lifetime store for all masked values.
 // One Vault instance is shared across all concurrent proxy requests.
 // (Tüm maskelenmiş değerler için merkezi, süreç-ömürlü depo.
-//  Tek bir Vault örneği, tüm eş zamanlı proxy istekleri arasında paylaşılır.)
+//
+//	Tek bir Vault örneği, tüm eş zamanlı proxy istekleri arasında paylaşılır.)
 type Vault struct {
 	mu      sync.RWMutex      // guards entries map (giriş haritasını korur)
 	entries map[string]*Entry // label → *Entry
@@ -57,14 +64,19 @@ func New(limit int) *Vault {
 // must then skip masking and forward the value as-is rather than lose data.
 //
 // (Üretilen bir etiket altına orijinal hassas değeri kaydeder.
-//  Vault limitine ulaşıldığında hata döner — çağıran, veri kaybını önlemek için
-//  maskelemeyi atlayıp değeri olduğu gibi iletmek zorundadır.)
+//
+//	Vault limitine ulaşıldığında hata döner — çağıran, veri kaybını önlemek için
+//	maskelemeyi atlayıp değeri olduğu gibi iletmek zorundadır.)
 func (v *Vault) Store(label, original string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
+	if _, exists := v.entries[label]; exists {
+		return fmt.Errorf("%w: %s", ErrLabelExists, label)
+	}
+
 	if len(v.entries) >= v.limit {
-		return fmt.Errorf("vault limit reached: %d/%d", len(v.entries), v.limit)
+		return fmt.Errorf("%w: %d/%d", ErrLimitReached, len(v.entries), v.limit)
 	}
 
 	v.entries[label] = &Entry{
@@ -77,7 +89,8 @@ func (v *Vault) Store(label, original string) error {
 // Retrieve looks up the original value for a given label.
 // The second return value is false when the label is not found.
 // (Verilen etiket için orijinal değeri arar.
-//  Etiket bulunamadığında ikinci dönüş değeri false olur.)
+//
+//	Etiket bulunamadığında ikinci dönüş değeri false olur.)
 func (v *Vault) Retrieve(label string) (string, bool) {
 	// Read lock (okuma kilidi) — allows concurrent access (eş zamanlı erişime izin verir)
 	v.mu.RLock()
@@ -97,7 +110,8 @@ func (v *Vault) Retrieve(label string) (string, bool) {
 // Reset wipes all entries, freeing memory.
 // Call this at the end of a session or when context changes.
 // (Tüm girişleri siler, belleği serbest bırakır.
-//  Oturum sonunda veya bağlam değiştiğinde çağırın.)
+//
+//	Oturum sonunda veya bağlam değiştiğinde çağırın.)
 func (v *Vault) Reset() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -107,7 +121,8 @@ func (v *Vault) Reset() {
 // Stats returns a snapshot of current usage for monitoring/logging.
 // It satisfies the metrics.VaultStatsProvider interface.
 // (İzleme/loglama için mevcut kullanımın anlık görüntüsünü döner.
-//  metrics.VaultStatsProvider arayüzünü karşılar.)
+//
+//	metrics.VaultStatsProvider arayüzünü karşılar.)
 func (v *Vault) Stats() metrics.VaultStats {
 	v.mu.RLock()
 	defer v.mu.RUnlock()

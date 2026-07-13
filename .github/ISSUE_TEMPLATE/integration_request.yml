@@ -1,0 +1,46 @@
+name: Integration request
+description: Suggest support documentation for another client or workflow
+title: "[Integration]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include real secrets, credentials, tokens, customer data, private repository content, or private configuration. Use sanitized examples only.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool or client
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Public documentation URL
+      description: Link to the client's public proxy or custom base URL documentation.
+    validations:
+      required: true
+  - type: dropdown
+    id: proxy
+    attributes:
+      label: Known integration method
+      options:
+        - Custom API base URL
+        - HTTP proxy environment variables
+        - Extension or plugin
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: Explain the workflow using only public and sanitized details.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I included no real secrets, credentials, tokens, customer data, or private repository content.
+          required: true

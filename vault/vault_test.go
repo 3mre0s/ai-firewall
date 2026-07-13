@@ -1,10 +1,28 @@
 package vault
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 )
+
+func TestVaultRejectsDuplicateLabel(t *testing.T) {
+	t.Parallel()
+
+	v := New(10)
+	if err := v.Store("[[LABEL_1]]", "first"); err != nil {
+		t.Fatalf("first store failed: %v", err)
+	}
+	if err := v.Store("[[LABEL_1]]", "second"); !errors.Is(err, ErrLabelExists) {
+		t.Fatalf("expected ErrLabelExists, got %v", err)
+	}
+
+	value, found := v.Retrieve("[[LABEL_1]]")
+	if !found || value != "first" {
+		t.Fatalf("duplicate store changed original value: found=%v value=%q", found, value)
+	}
+}
 
 func TestVaultStoreAndRetrieve(t *testing.T) {
 	t.Parallel()

@@ -310,12 +310,6 @@ func runUninstallCA() int {
 	return 0
 }
 
-// runVersion prints the build version injected via -ldflags.
-// (ldflags ile enjekte edilen derleme sürümünü yazdırır.)
-func runVersion() {
-	fmt.Printf("ai-firewall %s\n", version)
-}
-
 const demoPrompt = `FAKE SYNTHETIC TEST DATA — NOT VALID CREDENTIALS
 OpenAI-style key: sk-test-not-a-real-key-000000
 GITHUB_TOKEN=ghp_TESTNOTREAL0000000000000000000000000
@@ -409,10 +403,6 @@ func runDemo(out io.Writer) int {
 // (Kısa komut referansını yazdırır. Yalnızca "help"/"-h"/"--help" için gösterilir;
 //
 //	argümansız çalıştırma sunucuyu başlatmaya devam eder.)
-func runUsage() {
-	runUsageTo(os.Stdout)
-}
-
 func runUsageTo(out io.Writer) {
 	fmt.Fprint(out, `ai-firewall — Local AI Firewall
 

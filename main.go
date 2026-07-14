@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -52,17 +53,14 @@ func main() {
 	// (config.Load()'dan önce çalışmalıdır; CLI komutları hiçbir zaman
 	//  FORWARD_API_KEY gerektirmez.)
 	if len(os.Args) > 1 {
+		if handled, code := runOfflineCommand(os.Args[1], os.Stdout); handled {
+			os.Exit(code)
+		}
 		switch os.Args[1] {
 		case "install-ca":
 			os.Exit(runInstallCA())
 		case "uninstall-ca":
 			os.Exit(runUninstallCA())
-		case "version":
-			runVersion()
-			os.Exit(0)
-		case "help", "-h", "--help":
-			runUsage()
-			os.Exit(0)
 		}
 	}
 
@@ -220,8 +218,9 @@ func main() {
 // vb.) yalnızca yerel operatörler tarafından görülmeli.
 //
 // (Purpose: hide /metrics from external networks and AI providers.
-//  Internal state — vault occupancy, mask counts, etc. — should only
-//  be visible to the local operator.)
+//
+//	Internal state — vault occupancy, mask counts, etc. — should only
+//	be visible to the local operator.)
 func localhostOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// RemoteAddr biçimi: "IP:port" veya "[IPv6]:port"
@@ -317,16 +316,109 @@ func runVersion() {
 	fmt.Printf("ai-firewall %s\n", version)
 }
 
+const demoPrompt = `FAKE SYNTHETIC TEST DATA — NOT VALID CREDENTIALS
+OpenAI-style key: sk-test-not-a-real-key-000000
+GITHUB_TOKEN=ghp_TESTNOTREAL0000000000000000000000000
+Contact: developer@example.com
+File: /Users/example/project/.env`
+
+func runOfflineCommand(command string, out io.Writer) (bool, int) {
+	switch command {
+	case "demo":
+		return true, runDemo(out)
+	case "version":
+		fmt.Fprintf(out, "ai-firewall %s\n", version)
+		return true, 0
+	case "help", "-h", "--help":
+		runUsageTo(out)
+		return true, 0
+	default:
+		return false, 0
+	}
+}
+
+func runDemo(out io.Writer) int {
+	// The demo intentionally bypasses config loading, providers, telemetry, CA
+	// setup, and HTTP servers. Its only state is an in-memory vault discarded on exit.
+	cfg := &config.Config{
+		VaultSizeLimit: 16,
+		MaskPaths:      true,
+		MaskEmails:     true,
+		LogLevel:       "silent",
+	}
+	v := vault.New(cfg.VaultSizeLimit)
+	defer v.Reset()
+
+	result := masker.New(v, cfg).Mask(demoPrompt)
+	expectedRules := []string{
+		"OpenAI API Key",
+		"GitHub Personal Access Token v1",
+		"E-mail Address (E-posta Adresi)",
+		"Unix Absolute Path (Unix Mutlak Yol)",
+	}
+	foundRules := make(map[string]bool, len(result.Matches))
+	for _, match := range result.Matches {
+		foundRules[match.Rule] = true
+	}
+
+	if result.VaultEvictions != 0 || result.MaskedCount < len(expectedRules) {
+		fmt.Fprintln(out, "Demo failed: masking did not complete safely.")
+		return 1
+	}
+	for _, rule := range expectedRules {
+		if !foundRules[rule] {
+			fmt.Fprintf(out, "Demo failed: expected detector did not match: %s\n", rule)
+			return 1
+		}
+	}
+	for _, value := range []string{
+		"sk-test-not-a-real-key-000000",
+		"ghp_TESTNOTREAL0000000000000000000000000",
+		"developer@example.com",
+		"/Users/example/project/.env",
+	} {
+		if strings.Contains(result.Text, value) {
+			fmt.Fprintln(out, "Demo failed: sanitized output contains synthetic sensitive data.")
+			return 1
+		}
+	}
+
+	fmt.Fprintln(out, "Local AI Firewall — Offline Demo")
+	fmt.Fprintln(out, "\nNo network request will be made.")
+	fmt.Fprintln(out, "\nOriginal prompt:")
+	fmt.Fprintln(out, "--------------------------------------------------")
+	fmt.Fprintln(out, demoPrompt)
+	fmt.Fprintln(out, "--------------------------------------------------")
+	fmt.Fprintln(out, "\nDetected sensitive values:")
+	for _, rule := range expectedRules {
+		fmt.Fprintf(out, "✓ %s\n", rule)
+	}
+	fmt.Fprintln(out, "\nSanitized prompt:")
+	fmt.Fprintln(out, "--------------------------------------------------")
+	fmt.Fprintln(out, result.Text)
+	fmt.Fprintln(out, "--------------------------------------------------")
+	fmt.Fprintln(out, "\nThe placeholder mapping exists only in memory and will be discarded")
+	fmt.Fprintln(out, "when this command exits.")
+	fmt.Fprintln(out, "\nDemo complete. No data left this machine.")
+	return 0
+}
+
 // runUsage prints a short command reference. Shown only for "help"/"-h"/"--help";
 // running without arguments still starts the server.
 //
 // (Kısa komut referansını yazdırır. Yalnızca "help"/"-h"/"--help" için gösterilir;
-//  argümansız çalıştırma sunucuyu başlatmaya devam eder.)
+//
+//	argümansız çalıştırma sunucuyu başlatmaya devam eder.)
 func runUsage() {
-	fmt.Print(`ai-firewall — Local AI Firewall
+	runUsageTo(os.Stdout)
+}
+
+func runUsageTo(out io.Writer) {
+	fmt.Fprint(out, `ai-firewall — Local AI Firewall
 
 Usage:
   ai-firewall                Start the proxy server (reads config from env vars).
+  ai-firewall demo           Run a fully offline masking demo with synthetic data.
   ai-firewall install-ca     Install the MITM CA certificate into the system trust store.
   ai-firewall uninstall-ca   Remove the MITM CA certificate from the system trust store.
   ai-firewall version        Print the build version.

@@ -337,7 +337,7 @@ async function resolveBinary(ctx) {
             return p;
         }
     } else if (action === 'Open Releases') {
-        vscode.env.openExternal(vscode.Uri.parse('https://github.com/3mre0s/ai_firewall/releases/latest'));
+        vscode.env.openExternal(vscode.Uri.parse('https://github.com/3mre0s/ai-firewall/releases/latest'));
     }
 
     return null;

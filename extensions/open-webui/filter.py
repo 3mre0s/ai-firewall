@@ -1,7 +1,7 @@
 """
 title: AI Firewall Guard
 author: Local AI Firewall
-author_url: https://github.com/3mre0s/ai_firewall
+author_url: https://github.com/3mre0s/ai-firewall
 version: 0.1.0
 required_open_webui_version: 0.3.9
 description: Thin adapter that forwards chat content to the Go-based AI Firewall

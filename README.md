@@ -1,337 +1,287 @@
 # Local AI Firewall
 
-**Your secrets never leave your machine when you use AI coding tools.** A local proxy that strips API keys, passwords, and personal data out of your prompts before they reach Claude, OpenAI, Gemini, or any other provider — and restores them in the responses. No cloud, no account. Telemetry is disabled by default and opt-in only.
+Prevent Claude Code, Cursor, and AI coding agents from accidentally sending
+API keys, `.env` values, credentials, file paths, and personal data to LLM
+providers.
+
+Local AI Firewall runs entirely on your machine. It replaces detected secrets
+with typed placeholders before the request leaves your computer and restores
+them locally in the response.
+
+- Local-only
+- No account
+- No hosted gateway
+- Telemetry disabled by default
+- Secret mappings kept only in memory
+- Open source
 
 [![Go](https://img.shields.io/badge/go-1.22+-blue)](#build-from-source)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#running-tests)
+[![CI](https://github.com/3mre0s/ai-firewall/actions/workflows/ci.yml/badge.svg)](https://github.com/3mre0s/ai-firewall/actions/workflows/ci.yml)
 
----
+![Local AI Firewall demo](docs/demo.gif)
 
-|                          | Local AI Firewall | Typical cloud gateway (Lakera, Nightfall, Portkey…) |
-|--------------------------|--------------------|------------------------------------------------------|
-| Sends your data off-machine | No              | Yes — prompts pass through their servers              |
-| Install                 | Single binary, no account | Sign up, configure API keys, often SDK integration |
-| Cost                    | Free, AGPL-3.0     | Usage-based pricing                                   |
-| Works offline-first     | Yes                | No — depends on their service being up                |
-
----
-
-![demo](docs/demo.gif)
-## Quickstart (3 steps)
-
-**1. Install binary**
+## Try it safely
 
 ```bash
-# macOS
-brew install 3mre0s/ai-firewall/ai-firewall
-
-# Windows
-scoop bucket add ai-firewall https://github.com/3mre0s/scoop-bucket
-scoop install ai-firewall
-
-# Linux / manual
-curl -L https://github.com/3mre0s/ai_firewall/releases/latest/download/ai-firewall-linux-amd64.tar.gz | tar xz
-mv ai-firewall ~/.local/bin/
+ai-firewall demo
 ```
 
-**2. Install VS Code extension**
+This runs entirely offline with bundled synthetic credentials and the same
+masking engine used by the proxy. It does not require an API key, start the
+proxy, install a certificate, change environment variables, or send a network
+request. Placeholder mappings exist only in memory until the command exits.
 
-Download `local-ai-firewall.vsix` from the [latest release](../../releases/latest), then:
+Never paste a real API key, credential, customer record, or private repository
+content into a test.
+
+## Quickstart
+
+Explicit proxy mode is the default first experience. It requires no local CA
+and does not intercept unrelated HTTPS traffic.
+
+### 1. Install
+
+Requires Go 1.22 or later:
 
 ```bash
+git clone https://github.com/3mre0s/ai-firewall.git
+cd ai-firewall
+go build -trimpath -ldflags "-s -w" -o ai-firewall .
+./ai-firewall version
+```
+
+On Windows, build with `-o ai-firewall.exe` and run `./ai-firewall.exe version`.
+
+### 2. Start the firewall
+
+Claude Code Pro/Max subscription users can preserve the client's own
+authorization header:
+
+```bash
+export FORWARD_API_KEY=none
+ai-firewall
+```
+
+If you use an Anthropic API key, load it into your shell and pass it through
+the firewall without putting the value in this command:
+
+```bash
+export FORWARD_API_KEY="$ANTHROPIC_API_KEY"
+ai-firewall
+```
+
+The API proxy listens on `http://localhost:8080` by default.
+
+### 3. Start Claude Code through the proxy
+
+In a second terminal:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8080
+claude
+```
+
+See the focused [Claude Code setup guide](docs/claude-code.md) for verification,
+cleanup, and troubleshooting.
+
+## Supported tools
+
+- **Claude Code:** explicit proxy mode; subscription-token passthrough is supported.
+- **Cursor and VS Code:** use the included [VS Code extension](extensions/vscode/README.md).
+- **Aider:** see the [Aider integration guide](extensions/aider/README.md).
+- **Cline:** see the [Cline integration guide](extensions/cline/README.md).
+- **Open WebUI:** see the [Open WebUI integration guide](extensions/open-webui/README.md).
+- **Other clients:** point an Anthropic or OpenAI-compatible base URL at the local proxy.
+
+## Cursor and VS Code
+
+The extension can start and stop the firewall, store the provider key in the
+editor's secret storage, and copy proxy environment variables for an agent
+terminal.
+
+```bash
+cd extensions/vscode
+npm install
+npm run package
 code --install-extension local-ai-firewall.vsix
 ```
 
-**3. Start**
+Then run these commands from the Command Palette:
 
-- `Ctrl+Shift+P` → **Local AI Firewall: Set API Key**
-- `Ctrl+Shift+P` → **Local AI Firewall: Start**
-- `Ctrl+Shift+P` → **Local AI Firewall: Copy Agent Env** → paste in terminal
-- Run `claude`, `cursor`, or any AI coding tool
+1. `Local AI Firewall: Set API Key`
+2. `Local AI Firewall: Start`
+3. `Local AI Firewall: Copy Agent Env`
 
----
+See the [extension README](extensions/vscode/README.md) for binary discovery and
+development setup.
 
-## What makes it different
+## How it works
 
-Most secret-redaction tools ask you to reconfigure each client — change a base URL, run a Docker container, route through a hosted gateway. This one is built to disappear:
+1. Your AI tool sends a request to the local proxy.
+2. The firewall scans the complete request body for supported patterns.
+3. Each detected value is replaced with a typed placeholder such as
+   `[[OAI_KEY_A1B2C3D4E5F60718293A4B5C6D7E8F90]]`.
+4. The placeholder-to-secret mapping stays in an in-memory vault.
+5. The sanitized request is forwarded to the configured provider.
+6. Placeholders in buffered or SSE responses are restored locally before the
+   response reaches the client.
 
-- **Zero configuration** — transparent MITM mode intercepts HTTPS directly. Install the local CA once with a single command, and every AI tool on your machine is protected without touching its settings.
-- **Telemetry off by default** — nothing phones home unless you set `ANALYTICS_OPT_IN=true` *and* run an official release binary (self-built binaries never send telemetry). No account, no cloud component. When enabled, only a random install ID, version, OS, and arch are sent — never prompts, secrets, or paths. The metrics dashboard is bound to localhost and refuses any non-loopback request.
-- **Single static binary** — no runtime, no dependencies, no container. Download one file and run it. Cross-compiled for Linux, macOS, and Windows.
-- **Secrets stay in memory** — the token-to-secret mapping lives in an in-memory vault that is never written to disk and is wiped on shutdown.
+The provider receives the sanitized request body. Authentication headers still
+reach the provider: explicit mode either injects `FORWARD_API_KEY` or preserves
+the client's header when `FORWARD_API_KEY=none`.
 
-If you prefer explicit control over transparent interception, an environment-variable proxy mode is available too — see [Quick start](#quick-start).
+## What it detects
 
----
+The current registry covers:
 
-## Why this exists
+- API keys and tokens for common developer services
+- Password and secret assignments, including shell exports
+- Unix and Windows file paths
+- Email addresses, credit card numbers, and IBANs
+- Checksum-validated national identifiers documented in the source
 
-Every time you paste a stack trace, a config file, or a code snippet into Claude Code, Copilot, Cursor, or ChatGPT, there's a real chance it carries something you didn't mean to share: an API key, a database password, a file path that leaks your username, an email address. That data goes to a server you don't control.
+Detection is pattern-based and deliberately not presented as exhaustive. See
+[`patterns/patterns.go`](patterns/patterns.go) for the source of truth.
 
-Local AI Firewall sits between your AI tool and the provider. It scans each outgoing request, replaces every detected secret with a short placeholder like `[[OAI_KEY_A1B2C3D4]]`, and forwards the sanitised text. When the response comes back, it swaps the placeholders for the originals before your client sees them. The model gets enough context to stay useful; your secrets stay on your machine.
+## Why trust it?
 
-```
-  Your machine
-  ┌─────────────────────────────────────────────────────────┐
-  │                                                         │
-  │  AI tool          Local AI Firewall      AI provider   │
-  │  (Claude Code,  ──► [scan & mask] ──────► (Anthropic,  │
-  │   Copilot,           replace secrets      OpenAI, …)   │
-  │   Cursor …)     ◄─ [restore vault] ◄─────              │
-  │                       swap tokens back                  │
-  └─────────────────────────────────────────────────────────┘
-```
+- It runs locally and requires no project account.
+- Telemetry is disabled by default and requires explicit opt-in in an official
+  release binary.
+- Prompt contents are not sent to a project-owned cloud service.
+- Placeholder mappings remain in process memory and are cleared on graceful
+  shutdown.
+- The source can be inspected and [built locally](#build-from-source).
+- Transparent MITM mode is optional and disabled by default.
+- The trust boundaries and known trade-offs are documented in
+  [THREAT_MODEL.md](THREAT_MODEL.md).
 
-Secrets are masked on the way out and restored on the way back. The provider only ever sees placeholders.
+Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. These
+properties reduce accidental disclosure risk; they do not guarantee that every
+secret will be detected.
 
----
+## Limitations
 
-## Quick start
+- This is not a sandbox and does not defend against prompt injection or
+  malicious model output.
+- It does not protect a compromised local machine or another process running as
+  your user; such a process may read memory or local credentials.
+- Detection is pattern-based and may produce false negatives.
+- Legitimate content can match a pattern and produce false positives.
+- Unsupported, encoded, malformed, or truncated credential formats may not be
+  detected.
+- Only traffic routed through the firewall is scanned.
+- Transparent MITM mode installs a local CA and therefore changes the local
+  trust model; protect its private key and uninstall it when no longer needed.
+- New secrets in streaming responses may be missed when their bytes cross SSE
+  chunk boundaries. Requests are scanned as complete bodies, and restoration of
+  known placeholders uses a rolling buffer.
 
-### 1. Get the binary
+See [THREAT_MODEL.md](THREAT_MODEL.md) for the complete threat model.
 
-**macOS / Linux (Homebrew):**
+## Advanced: transparent MITM mode
+
+Transparent mode is optional. It terminates TLS locally for configured AI hosts
+and requires trusting a locally generated CA.
 
 ```bash
-brew install 3mre0s/ai-firewall/ai-firewall
-```
-
-**Windows (Scoop):**
-
-```powershell
-scoop bucket add ai-firewall https://github.com/3mre0s/scoop-bucket
-scoop install ai-firewall
-```
-
-**Manual download:** grab the archive for your platform from the [Releases](../../releases) page, extract it, and put `ai-firewall` on your `PATH`.
-
-```bash
-# Linux / macOS example
-tar -xzf ai-firewall-linux-amd64.tar.gz
-chmod +x ai-firewall
-mv ai-firewall ~/.local/bin/
-```
-
-Verify the download against `checksums.txt` from the same release before running.
-
-### 2a. Transparent mode (recommended — zero client config)
-
-Install the local CA into your system trust store once, then start the firewall in MITM mode. No AI tool needs to be reconfigured.
-
-```bash
-# Install the CA (needs sudo on macOS/Linux, Administrator on Windows)
+export AI_FIREWALL_CA_PASSPHRASE="choose-a-strong-local-passphrase"
 ai-firewall install-ca
-
-# Protect the CA key with a passphrase, then start in transparent mode
-export AI_FIREWALL_CA_PASSPHRASE="pick-a-strong-passphrase"
-export FORWARD_API_KEY="sk-ant-..."   # your real provider key, or "none" for passthrough
+export FORWARD_API_KEY=none
 export MITM_ENABLED=true
 ai-firewall
 ```
 
-Point your system or application HTTP proxy at `http://localhost:8082` and you're protected. To remove the CA later: `ai-firewall uninstall-ca`.
+Point the application or system HTTP proxy at `http://localhost:8082`. In this
+mode request bodies are scanned, while the client's authentication header is
+forwarded unchanged.
 
-In transparent mode your AI tool sends its own credentials as usual — the firewall does **not** touch the `x-api-key` or `Authorization` header, so authentication keeps working exactly as before. The firewall only scans and masks the **request body**; your auth key passes through untouched. (This differs from explicit proxy mode below, where the firewall injects `FORWARD_API_KEY` upstream on your behalf.)
-
-> **Note on the CA passphrase:** if you skip `AI_FIREWALL_CA_PASSPHRASE`, the CA private key is written to disk unencrypted (mode `0600`). That key can sign certificates for any domain on this machine, so setting a passphrase is strongly recommended. The cert directory gets an automatic `.gitignore` to prevent accidental commits.
-
-### 2b. Explicit proxy mode (if you prefer env-var control)
-
-Point your tool's base URL at the firewall instead of intercepting traffic.
+Remove the CA when finished:
 
 ```bash
-export FORWARD_API_KEY="sk-ant-..."   # real key, injected upstream
-ai-firewall                            # defaults to api.anthropic.com on :8080
+ai-firewall uninstall-ca
 ```
 
-Then in your AI tool:
-
-```bash
-# Claude Code
-export ANTHROPIC_BASE_URL="http://localhost:8080"
-claude
-
-# OpenAI-compatible tools
-export OPENAI_BASE_URL="http://localhost:8080"
-```
-
-The firewall injects the real `FORWARD_API_KEY` upstream, so your client can send any placeholder key or none at all. To target a different provider, set `UPSTREAM_URL` (e.g. `https://api.openai.com`).
-
-Use `FORWARD_API_KEY=none` if you authenticate with a subscription token (Claude Code Pro/Max uses `ANTHROPIC_AUTH_TOKEN`); the firewall forwards the client's own `Authorization` header unchanged.
-
----
-
-## What it detects
-
-**28 detection patterns**, covering:
-
-- **API keys & tokens** — Anthropic, OpenAI, Google, GitHub, GitLab, AWS, Stripe, Slack, JWTs, Bearer tokens, PEM private keys
-- **Inline credentials** — password assignments, shell `export` secrets
-- **System paths** — Unix and Windows filesystem paths that can leak your username
-- **Personal data** — email addresses, credit card numbers, IBANs
-- **National IDs (checksum-validated)** — Turkish TC Kimlik, Brazilian CPF (mod-11), Spanish DNI (mod-23), Indian Aadhaar (Verhoeff), Italian Codice Fiscale
-
-**14 provider adapters** — Anthropic, OpenAI, Gemini, Azure OpenAI, Groq, Together AI, Perplexity, Mistral, Cohere, DeepSeek, xAI, Ollama, LM Studio, and a generic OpenAI-compatible catch-all.
-
-**IDE extensions** — start, stop, and manage the firewall from VS Code / Cursor (stable) or JetBrains IDEs (beta). The extension auto-discovers the binary and sets the proxy URL for you.
-
----
-
-## How it works
-
-**Request path**
-
-1. Your AI tool sends a prompt to the firewall.
-2. The firewall scans the request body against all patterns and replaces each match with a deterministic token (e.g. `[[GH_PAT_3F9A1C2E]]`).
-3. The token→secret mapping is stored in an in-memory vault — never on disk.
-4. The sanitised request is forwarded to the real provider with your API key injected.
-
-**Response path**
-
-5. The provider's response arrives (buffered or SSE streaming).
-6. The firewall scans for any tokens it placed and substitutes the originals back in.
-7. The restored response is returned to the client.
-
----
+If `AI_FIREWALL_CA_PASSPHRASE` is unset, the private key is stored as an
+unencrypted `0600` PEM file. Review the MITM-specific risks in
+[THREAT_MODEL.md](THREAT_MODEL.md) before enabling this mode.
 
 ## Configuration
 
-All settings come from environment variables. No config file is needed or supported.
+All settings are environment variables; no configuration file is required.
 
 | Variable | Default | Description |
 |---|---|---|
-| `FORWARD_API_KEY` | *(required)* | Real API key forwarded to the upstream provider. Never logged or stored on disk. Set to `"none"` for passthrough mode: the firewall forwards the client's own `Authorization: Bearer` header unchanged. |
-| `UPSTREAM_URL` | `https://api.anthropic.com` | Base URL of the upstream AI provider. Trailing slash is stripped automatically. |
-| `FIREWALL_PORT` | `8080` | TCP port the API proxy listens on. |
-| `PROVIDER_HINT` | *(auto-detect)* | Force a specific provider adapter instead of detecting from `UPSTREAM_URL`. Valid values: `anthropic`, `openai`, `gemini`, `groq`, `together`, `perplexity`, `mistral`, `cohere`, `deepseek`, `xai`, `ollama`, `lmstudio`, `azure`, `generic`. |
-| `VAULT_SIZE_LIMIT` | `1000` | Maximum number of token→secret entries held in memory. Once reached, the request is rejected with 507 Insufficient Storage to prevent silent data leakage. Increase the limit or restart the proxy to clear the vault. |
-| `MASK_PATHS` | `true` | Detect and mask Unix and Windows filesystem paths. |
-| `MASK_EMAILS` | `true` | Detect and mask email addresses (PII). |
-| `LOG_LEVEL` | `info` | Verbosity: `silent` \| `info` \| `debug`. |
-| `MITM_ENABLED` | `false` | Start the transparent MITM proxy server in addition to the API proxy. |
-| `MITM_PORT` | `8082` | TCP port the MITM proxy listens on. |
-| `MITM_CERT_DIR` | `~/.ai-firewall` | Directory where `ca.crt` and `ca.key` are stored. Created with `0700` permissions if absent. |
-| `AI_FIREWALL_CA_PASSPHRASE` | *(unset)* | Passphrase used to encrypt the CA private key with AES-256-GCM. If unset, the key is stored as a plain `0600` PEM file and a warning is logged at startup. |
+| `FORWARD_API_KEY` | required | Provider key injected upstream. Use `none` to preserve client authentication headers. |
+| `UPSTREAM_URL` | `https://api.anthropic.com` | Upstream provider base URL. |
+| `FIREWALL_PORT` | `8080` | Explicit API proxy port. |
+| `PROVIDER_HINT` | auto-detect | Optional provider adapter override. |
+| `VAULT_SIZE_LIMIT` | `200` | Maximum in-memory placeholder mappings. |
+| `MASK_PATHS` | `true` | Mask supported Unix and Windows paths. |
+| `MASK_EMAILS` | `true` | Mask email addresses. |
+| `LOG_LEVEL` | `info` | `silent`, `info`, or `debug`. |
+| `MITM_ENABLED` | `false` | Enable the optional transparent proxy. |
+| `MITM_PORT` | `8082` | Transparent proxy port. |
+| `MITM_CERT_DIR` | `~/.ai-firewall` | Local CA certificate and key directory. |
+| `AI_FIREWALL_CA_PASSPHRASE` | unset | Encrypt the persisted CA private key. |
+| `ANALYTICS_OPT_IN` | `false` | Opt in to minimal release telemetry. |
 
----
+Supported commands:
 
-## CLI commands
-
-```
-ai-firewall                Start the proxy server (reads config from env vars).
-ai-firewall install-ca     Install the MITM CA certificate into the system trust store.
-ai-firewall uninstall-ca   Remove the MITM CA certificate from the system trust store.
+```text
+ai-firewall                Start the proxy server.
+ai-firewall demo           Run the offline synthetic masking demo.
+ai-firewall install-ca     Install the local MITM CA.
+ai-firewall uninstall-ca   Remove the local MITM CA.
 ai-firewall version        Print the build version.
 ai-firewall help           Show usage.
 ```
 
-`install-ca` and `uninstall-ca` are idempotent — running them twice is safe and reports the current state.
+## Security
 
----
+The firewall is designed to reduce accidental disclosure to an LLM provider,
+not to replace endpoint security, secret scanning in CI, or provider-side data
+controls.
 
-## Security notes
+- Read the [threat model](THREAT_MODEL.md).
+- Report vulnerabilities using [SECURITY.md](SECURITY.md).
+- Keep provider credentials in your normal secret-management workflow.
+- Use only synthetic values in bug reports and tests.
+- The local `/metrics` and `/dashboard` endpoints reject non-loopback clients.
 
-> For the full picture, see **[THREAT_MODEL.md](THREAT_MODEL.md)** (what this tool does and does not protect against) and **[SECURITY.md](SECURITY.md)** (how to report a vulnerability).
+Telemetry sends nothing unless `ANALYTICS_OPT_IN=true` and the binary is an
+official release containing the telemetry build key. Self-built binaries do not
+send telemetry. Prompt contents, secrets, paths, and environment values are not
+telemetry fields.
 
-### Threat model in brief
+## Development
 
-This tool protects against **accidentally sending secrets to an AI provider**. It is not a sandbox and does not protect against malware already running as your user. Secrets are masked on a complete request buffer; the in-memory vault is never persisted.
-
-### CA private key protection
-
-When MITM mode is enabled, a self-signed ECDSA P-256 CA (`CN=AI Firewall CA`) is generated and persisted to `MITM_CERT_DIR`. The public certificate (`ca.crt`) is world-readable because clients need it; the private key (`ca.key`) is written `0600` (owner-read only), and the directory gets a `.gitignore` to block accidental commits.
-
-Set `AI_FIREWALL_CA_PASSPHRASE` before first run so the key is stored AES-256-GCM encrypted. If the file is read back later, the same passphrase must be present in the environment.
-
-**Known trade-off:** the AES key is currently derived from the passphrase via a single SHA-256 hash rather than a password-based KDF (scrypt, Argon2id). This offers limited resistance to offline dictionary attacks if the encrypted key is exfiltrated. Mitigating factors: the file is `0600`, the passphrase is never written to disk, and the CA only signs leaf certificates valid for 24 hours. Hardening the derivation to Argon2id is on the roadmap.
-
-### Streaming responses
-
-In SSE streaming mode each chunk is processed as it arrives. A secret whose bytes are split across a chunk boundary may pass through the response unmasked. This is inherent to chunk-by-chunk processing and applies only to the response path — secrets in the request body are always processed on a complete buffer.
-
-### Metrics and dashboard
-
-`/metrics` and `/dashboard` are restricted to `127.0.0.1` and `::1`. Any request from a non-loopback address receives `403 Forbidden`, preventing internal vault state from leaking to the upstream provider or external networks.
-
-### Vault lifecycle
-
-The in-memory vault is cleared on graceful shutdown (`SIGINT` / `SIGTERM`). In-flight requests are allowed to complete before the wipe, preventing a race between active unmask operations and the reset.
-
----
-
-## Build from source
-
-Requires Go 1.22 or later. No external dependencies — the build works offline after cloning.
+### Build from source
 
 ```bash
-git clone https://github.com/3mre0s/ai_firewall.git
-cd ai_firewall
+git clone https://github.com/3mre0s/ai-firewall.git
+cd ai-firewall
 go build -trimpath -ldflags "-s -w" -o ai-firewall .
-
-# Run (FORWARD_API_KEY is required; use "none" for passthrough mode)
-export FORWARD_API_KEY="sk-ant-..."   # your real provider key
-./ai-firewall
 ```
 
----
+On Windows, use `-o ai-firewall.exe`.
 
-## Running tests
+### Run checks
 
 ```bash
 go test ./...
 go vet ./...
 ```
 
----
-
-## IDE Extensions
-
-| IDE | Location | Status |
-|---|---|---|
-| VS Code / Cursor | `extensions/vscode` | Stable |
-| JetBrains IDEs | `extensions/jetbrains` | Beta |
-
-Both extensions auto-discover the `ai-firewall` binary from the workspace root, OS-standard install directories, and `PATH`. See each extension's own README for setup.
-
----
-
-## Contributing
-
-Contributions are welcome. Please open an issue before starting a large change.
-
-- **New detection pattern** — add a `SensitivePattern` entry in `patterns/patterns.go` and cover it in `masker/masker_test.go`.
-- **New provider** — implement the `Provider` interface (or embed `openAICompatProvider`) in `providers/`, register it in `providers/provider.go`, and add it to `hintMap`.
-
-```bash
-go test ./...   # must pass
-go vet ./...    # must report nothing
-```
-
----
-
-## Telemetry
-
-Disabled by default. **Two conditions must both be true** to send anything:
-
-1. You set `ANALYTICS_OPT_IN=true`
-2. You are running an official release binary — self-built binaries never send telemetry because no API key is compiled in
-
-If you build from source (including `go install`), condition 2 is never met, so nothing is ever sent regardless of `ANALYTICS_OPT_IN`.
-
-**Sent** (only when both conditions are true): a random install ID, version, OS, arch.  
-**Never sent**: prompts, secrets, file paths, environment variables, or anything passing through the masking pipeline.
-
-The install ID is a random hex string generated with `crypto/rand` and stored in `~/.ai-firewall/telemetry_id`. It has no relation to your identity, machine, or network address. Analytics backend: PostHog (EU region).
-
----
+See [CONTRIBUTING.md](CONTRIBUTING.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
+[DEPLOYMENT.md](DEPLOYMENT.md) for contributor and deployment details.
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 or later** (AGPL-3.0-or-later) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Local AI Firewall is licensed under the
+[GNU Affero General Public License v3.0 or later](LICENSE). See [NOTICE](NOTICE)
+for additional notices.
 
-### Commercial licensing
-
-If the AGPL-3.0 terms are not compatible with your use case (e.g., you need to embed Local AI Firewall in a closed-source product or a hosted service without disclosing your source code), a separate commercial license is available.
-
-Commercial licensing inquiries should be kept private. Please reach out via the contact information on the maintainer's GitHub profile, or send a private message directly — do not open a public issue for commercial requests.
+Commercial licensing inquiries should be sent privately through the
+maintainer's GitHub profile rather than opened as a public issue.

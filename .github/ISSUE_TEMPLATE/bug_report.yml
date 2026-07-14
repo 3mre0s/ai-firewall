@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a reproducible problem with sanitized data
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include real secrets, credentials, tokens, customer data, private repository content, or unredacted logs. Use synthetic values only.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem without private data.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest sanitized reproduction.
+      placeholder: "1. Start the firewall with...\n2. Run...\n3. Observe..."
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `ai-firewall version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Explicit proxy
+        - Transparent MITM
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, client, and relevant variable names only. Do not include values.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed all real secrets, tokens, customer data, private code, paths, and credentials.
+          required: true

@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -32,11 +34,24 @@ jobs:
 
       - name: Format check
         run: |
-          files=$(gofmt -l .)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -z "$base" ] || [[ "$base" =~ ^0+$ ]]; then
+            changed=$(git ls-files '*.go')
+          else
+            changed=$(git diff --name-only --diff-filter=ACMR "$base" "${{ github.sha }}" -- '*.go')
+          fi
+          if [ -z "$changed" ]; then
+            exit 0
+          fi
+          files=$(gofmt -l $changed)
           if [ -n "$files" ]; then
             echo "The following files are not gofmt'd:"
             echo "$files"
-            echo "Run: gofmt -w ."
+            echo "Run gofmt on the changed files."
             exit 1
           fi
 
@@ -56,6 +71,7 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
+          only-new-issues: true
 
   build:
     name: Cross-compile ${{ matrix.goos }}/${{ matrix.goarch }}

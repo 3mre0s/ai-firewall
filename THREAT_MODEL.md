@@ -16,17 +16,16 @@ username, an email address.
 **What the firewall does:** it sits between your AI tool and the provider,
 detects secrets in the **request body**, replaces each with a placeholder
 before the request leaves your machine, and restores the originals in the
-response before your client sees them. The provider only ever receives
-placeholders.
+response before your client sees them. For values matched by the configured
+patterns, the provider receives placeholders instead of the original values.
 
 ## What it protects against
 
 - **Accidental exfiltration of secrets to an AI provider.** The primary goal.
   Detected secrets in the request body are replaced with placeholders before
   the request is forwarded.
-- **Leaking the token→secret mapping.** The vault that maps placeholders back to
-  originals lives only in memory. It is never written to disk and is wiped on
-  graceful shutdown.
+- **Leaking the token→secret mapping.** Each request gets an isolated vault that
+  lives only in memory, is never persisted, and is wiped after its response.
 - **The firewall's own API key leaking.** In explicit proxy mode,
   `FORWARD_API_KEY` is injected upstream and is never logged or written to disk.
 - **Internal state leaking to the network.** The `/metrics` and `/dashboard`
@@ -61,9 +60,9 @@ Be clear-eyed about these. The firewall is not a sandbox.
 | Boundary | Trusted? | Notes |
 |---|---|---|
 | Your machine / user account | Trusted | The whole design assumes this. |
-| The in-memory vault | Trusted, never persisted | Wiped on shutdown. |
+| Per-request in-memory vault | Trusted, never persisted | Isolated and wiped after each response. |
 | The CA private key on disk | Sensitive | `0600`; encrypt with a passphrase. |
-| The upstream AI provider | **Untrusted** | Sees only masked request bodies. |
+| The upstream AI provider | **Untrusted** | Receives proxied bodies with recognised values masked; detection is best-effort. |
 | The network between you and the provider | Untrusted | Standard TLS to the provider. |
 | `/metrics`, `/dashboard` | Loopback only | `403` for any non-loopback client. |
 
@@ -81,10 +80,9 @@ Implications you should understand:
   That is the whole point of a locally trusted CA, and also why protecting the
   CA private key matters. Remove it with `ai-firewall uninstall-ca` when you're
   done.
-- **Only configured AI hosts are intercepted.** Non-AI hosts pass through as a
-  blind tunnel without TLS termination, so the firewall never sees their
-  contents. This limits exposure but also means traffic to an unrecognised AI
-  host is not scanned.
+- **Only configured AI hosts are intercepted.** CONNECT requests for other
+  hosts are rejected. Traffic that does not use the proxy remains outside the
+  firewall and is not scanned.
 
 ## Known limitations and trade-offs
 

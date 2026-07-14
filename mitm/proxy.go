@@ -25,19 +25,7 @@ import (
 )
 
 // ════════════════════════════════════════════════════════════════════════════
-// limitedReadCloser wraps an io.Reader with a Close method to satisfy io.ReadCloser.
-// (limitedReadCloser, io.ReadCloser arayüzünü karşılamak için Close yöntemiyle io.Reader'ı sarar.)
-type limitedReadCloser struct {
-	io.Reader
-	close func() error
-}
-
-func (l *limitedReadCloser) Close() error {
-	if l.close != nil {
-		return l.close()
-	}
-	return nil
-}
+const maxMITMRequestBody = 32 << 20
 
 // ════════════════════════════════════════════════════════════════════════════
 // MITMProxy — Transparent MITM Proxy Handler
@@ -46,7 +34,7 @@ func (l *limitedReadCloser) Close() error {
 // MITMProxy handles HTTP CONNECT requests to intercept TLS traffic to AI providers.
 // For AI hosts, it performs TLS termination with dynamically generated leaf certs,
 // masks sensitive data, forwards to the real API, and unmasks responses.
-// For non-AI hosts, it creates a blind TCP tunnel (no TLS interception).
+// Non-AI hosts are rejected. This service is not a general-purpose CONNECT proxy.
 //
 // (HTTP CONNECT isteklerini işleyerek AI sağlayıcılarına yapılan TLS trafiğini
 //	yakalar. AI ana bilgisayarları için dinamik olarak oluşturulan yaprak sertifikalar
@@ -54,13 +42,13 @@ func (l *limitedReadCloser) Close() error {
 //	yanıtların maskelerini kaldırır. AI olmayan ana bilgisayarlar için kör TCP
 //	tüneli oluşturur (TLS müdahalesi olmaz).)
 type MITMProxy struct {
-	ca    *CA
+	ca     *CA
 	masker *masker.Masker
-	cfg   *config.Config
+	cfg    *config.Config
 
 	// aiHosts maps hostnames to their provider patterns for interception.
 	// If a CONNECT request targets a host in this map, TLS is intercepted.
-	// Otherwise, a blind TCP tunnel is created.
+	// Otherwise, the request is rejected.
 	// (aiHosts, müdahale için ana bilgisayar adlarını sağlayıcı desenlerine eşler.
 	//	Eğer bir CONNECT isteği bu haritada yer alan bir ana bilgisayara yönelikse,
 	//	TLS yakalanır. Aksi halde kör TCP tüneli oluşturulur.)
@@ -79,9 +67,9 @@ func NewMITMProxy(ca *CA, m *masker.Masker, cfg *config.Config) *MITMProxy {
 	aiHosts := buildAIHostsMap()
 
 	return &MITMProxy{
-		ca:    ca,
-		masker: m,
-		cfg:   cfg,
+		ca:      ca,
+		masker:  m,
+		cfg:     cfg,
 		aiHosts: aiHosts,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
@@ -111,7 +99,7 @@ func buildAIHostsMap() map[string]bool {
 		"api.openai.com": true,
 		// Google
 		"generativelanguage.googleapis.com": true,
-		"aiplatform.googleapis.com":       true,
+		"aiplatform.googleapis.com":         true,
 		// Groq
 		"api.groq.com": true,
 		// Together AI
@@ -211,67 +199,13 @@ func (p *MITMProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//	Tam yerel sağlayıcı girişlerini herhangi bir alt dize kontrolü olmadan eşleştirebilmek
 	//	için orijinal host:port'u iletir.)
 	if !p.isAIHost(hostport) {
-		// Non-AI traffic: create a blind TCP tunnel.
-		// (AI olmayan trafik: kör TCP tüneli oluştur.)
-		p.handleBlindTunnel(w, r, host)
+		http.Error(w, "CONNECT target is not an allowed AI provider", http.StatusForbidden)
 		return
 	}
 
 	// AI host: intercept TLS, mask/unmask data.
 	// (AI ana bilgisayarı: TLS'yi yakala, verileri maskele/çöz.)
 	p.handleMITMTunnel(w, r, host)
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Blind TCP Tunnel (Kör TCP Tüneli)
-// ════════════════════════════════════════════════════════════════════════════
-
-// handleBlindTunnel creates a raw TCP tunnel for non-AI traffic.
-// No TLS interception is performed; data is relayed byte-for-byte.
-//
-// (AI olmayan trafik için ham TCP tüneli oluşturur.
-//	TLS müdahalesi yapılmaz; veriler bayt bayt iletilir.)
-func (p *MITMProxy) handleBlindTunnel(w http.ResponseWriter, r *http.Request, host string) {
-	// Send 200 Connection Established to client.
-	// (İstemciye 200 Bağlantı Kuruldu yanıtı gönder.)
-	w.WriteHeader(http.StatusOK)
-
-	// Hijack the client connection to get raw TCP access.
-	// (İstemci bağlantısını ele geçirerek ham TCP erişimi elde et.)
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-		return
-	}
-
-	clientConn, _, err := hj.Hijack()
-	if err != nil {
-		log.Printf("[mitm][error] hijack failed: %v", err)
-		return
-	}
-	defer clientConn.Close()
-
-	// Connect to the target host.
-	// (Hedef ana bilgisayarına bağlan.)
-	targetConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
-	if err != nil {
-		log.Printf("[mitm][error] dial target failed: %v", err)
-		return
-	}
-	defer targetConn.Close()
-
-	// Send 200 Connection Established after successful dial.
-	// (Başarılı bağlanmadan sonra 200 Bağlantı Kuruldu gönder.)
-	_, err = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	if err != nil {
-		log.Printf("[mitm][error] write connection established failed: %v", err)
-		return
-	}
-
-	// Start bidirectional copying.
-	// (Çift yönlü kopyalamayı başlat.)
-	go io.Copy(targetConn, clientConn)
-	io.Copy(clientConn, targetConn)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -286,10 +220,6 @@ func (p *MITMProxy) handleBlindTunnel(w http.ResponseWriter, r *http.Request, ho
 //	MITM el sıkışmasını yapar, HTTP isteğini şifresini çözer, hassas verileri maskele,
 //	gerçek API'ye iletir ve yanıtın maskesini kaldırır.)
 func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, host string) {
-	// Send 200 Connection Established to client.
-	// (İstemciye 200 Bağlantı Kuruldu yanıtı gönder.)
-	w.WriteHeader(http.StatusOK)
-
 	// Hijack the client connection.
 	// (İstemci bağlantısını ele geçir.)
 	hj, ok := w.(http.Hijacker)
@@ -304,6 +234,10 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 		return
 	}
 	defer clientConn.Close()
+	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		log.Printf("[mitm][error] write connection established failed: %v", err)
+		return
+	}
 
 	// Get or generate a leaf certificate for the target host.
 	// (Hedef ana bilgisayar için bir yaprak sertifika al veya oluştur.)
@@ -347,54 +281,41 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 
 	log.Printf("[mitm][info] TLS handshake complete with client for %s", host)
 
-	// Read the decrypted HTTP request from the client.
-	// (İstemciden şifresi çözülmüş HTTP isteğini oku.)
-	req, err := http.ReadRequest(bufio.NewReader(tlsConn))
+	// Keep one buffered reader for the TLS connection so HTTP/1.1 keep-alive
+	// requests can be processed without losing bytes already read ahead.
+	clientReader := bufio.NewReader(tlsConn)
+
+readRequest:
+	req, err := http.ReadRequest(clientReader)
 	if err != nil {
 		log.Printf("[mitm][error] read HTTP request failed: %v", err)
 		return
 	}
 
-	// Limit request body size to 32 MB.
-	// Since we can't return a 413 error easily through the TLS connection,
-	// we use io.LimitReader and handle size errors manually.
-	// (İstek gövdesi boyutunu 32 MB ile sınırla.
-	//	TLS bağlantısı üzerinden kolayca 413 hatası döndüremediğimiz için,
-	//	io.LimitReader kullanıyor ve boyut hatalarını elle işliyoruz.)
-	req.Body = &limitedReadCloser{
-		Reader: io.LimitReader(req.Body, 32<<20),
-		close:  req.Body.Close,
+	encoding := strings.TrimSpace(req.Header.Get("Content-Encoding"))
+	if encoding != "" && !strings.EqualFold(encoding, "identity") {
+		writeMITMError(tlsConn, http.StatusUnsupportedMediaType, "compressed request bodies are not supported")
+		return
 	}
 
-	// Read the full request body.
-	// (Tüm istek gövdesini oku.)
-	body, err := io.ReadAll(req.Body)
+	body, tooLarge, err := readMITMBody(req.Body)
+	_ = req.Body.Close()
 	if err != nil {
-		// Check if error is due to body size limit.
-		// (Hatanın gövde boyut sınırından kaynaklanıp kaynaklanmadığını kontrol et.)
-		if err.Error() == "http: request body too large" {
-			log.Printf("[mitm][error] request body too large")
-			// Send 413 error response.
-			// (413 hata yanıtı gönder.)
-			response := "HTTP/1.1 413 Request Entity Too Large\r\n"
-			response += "Content-Type: text/plain\r\n"
-			response += "Connection: close\r\n\r\n"
-			response += "request body too large"
-			if _, err := tlsConn.Write([]byte(response)); err != nil {
-				log.Printf("[mitm][error] write 413 response failed: %v", err)
-			}
-			return
-		}
 		log.Printf("[mitm][error] read request body failed: %v", err)
 		return
 	}
-	defer req.Body.Close()
+	if tooLarge {
+		writeMITMError(tlsConn, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
 
 	log.Printf("[mitm][info] → %s %s", req.Method, req.URL.Path)
 
 	// ── Step 1: Mask sensitive data in the request body ─────────────────────
 	// (Adım 1: İstek gövdesindeki hassas verileri maskele)
-	maskResult := p.masker.Mask(string(body))
+	requestMasker := p.masker.NewScope()
+	defer requestMasker.Reset()
+	maskResult := requestMasker.Mask(string(body))
 
 	if maskResult.MaskedCount > 0 {
 		log.Printf("[mitm][info] 🛡 masked %d item(s)", maskResult.MaskedCount)
@@ -424,10 +345,8 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 	// (Adım 2: Maskelelenmiş isteği gerçek AI API'sine ilet)
 	// Build the upstream URL.
 	// (Upstream URL'sini oluştur.)
-	upstreamURL := fmt.Sprintf("https://%s%s", host, req.URL.Path)
-	if req.URL.RawQuery != "" {
-		upstreamURL += "?" + req.URL.RawQuery
-	}
+	// Preserve the CONNECT authority, including non-default ports.
+	upstreamURL := mitmUpstreamURL(r.Host, req.URL.Path, req.URL.RawQuery)
 
 	// Create a new request to the upstream.
 	// (Upstream'e yeni bir istek oluştur.)
@@ -457,6 +376,8 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 	upstreamReq.Header.Del("Trailers")
 	upstreamReq.Header.Del("Transfer-Encoding")
 	upstreamReq.Header.Del("Upgrade")
+	upstreamReq.Header.Del("Content-Encoding")
+	upstreamReq.Header.Set("Accept-Encoding", "identity")
 
 	// Forward the request to the real API.
 	// (İsteği gerçek API'ye ilet.)
@@ -466,6 +387,10 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 		return
 	}
 	defer resp.Body.Close()
+	if encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		writeMITMError(tlsConn, http.StatusBadGateway, "compressed upstream response rejected")
+		return
+	}
 
 	log.Printf("[mitm][info] ← upstream %d", resp.StatusCode)
 
@@ -501,12 +426,12 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 			log.Printf("[mitm][error] read response body failed: %v", err)
 			return
 		}
-		standardBody = []byte(p.masker.Unmask(string(raw)))
+		standardBody = []byte(requestMasker.Unmask(string(raw)))
 	}
 
 	// Write response status line.
 	// (Yanıt durum satırını yaz.)
-	text := fmt.Sprintf("HTTP/1.1 %03d %s\r\n", resp.StatusCode, resp.Status)
+	text := fmt.Sprintf("HTTP/1.1 %s\r\n", resp.Status)
 	if _, err := tlsConn.Write([]byte(text)); err != nil {
 		log.Printf("[mitm][error] write status line failed: %v", err)
 		return
@@ -555,11 +480,19 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 	if isStream {
 		// Handle streaming response with chunk-by-chunk unmasking.
 		// (Akış yanıtını parça parça maskeleme kaldırma ile işle.)
-		p.handleStreamResponse(tlsConn, resp.Body)
+		if !p.handleStreamResponse(tlsConn, resp.Body, requestMasker) {
+			return
+		}
 	} else {
 		if _, err := tlsConn.Write(standardBody); err != nil {
 			log.Printf("[mitm][error] write unmasked response failed: %v", err)
 		}
+	}
+
+	if !req.Close && !resp.Close {
+		_ = resp.Body.Close()
+		requestMasker.Reset()
+		goto readRequest
 	}
 }
 
@@ -580,10 +513,10 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 //	Tespit noktasından önce bağlantıya yazılmış chunk'lar geri alınamaz —
 //	bu temel bir HTTP/TLS streaming kısıtıdır. İstemci eksiksiz bir yanıt
 //	yerine beklenmedik bir bağlantı kapanması alır.)
-func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader) {
+func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader, requestMasker *masker.Masker) bool {
 	// Reuse the StreamProcessor from proxy package.
 	// (proxy paketinden StreamProcessor'u yeniden kullan.)
-	processor := proxy.NewStreamProcessor(p.masker)
+	processor := proxy.NewStreamProcessor(requestMasker)
 	buf := make([]byte, 4096)
 
 	for {
@@ -594,12 +527,12 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader) {
 			// (Hızlı başarısızlık: akış çıktısında sır — bağlantıyı derhal kapat.)
 			if processor.LeakDetected() {
 				log.Printf("[mitm][error] 🚨 secret detected in stream — terminating connection")
-				return
+				return false
 			}
 			if out != "" {
 				if err := writeChunk(conn, []byte(out)); err != nil {
 					log.Printf("[mitm][error] write stream chunk failed: %v", err)
-					return
+					return false
 				}
 			}
 		}
@@ -616,12 +549,12 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader) {
 	tail := processor.Flush()
 	if processor.LeakDetected() {
 		log.Printf("[mitm][error] 🚨 secret in stream tail — terminating")
-		return
+		return false
 	}
 	if tail != "" {
 		if err := writeChunk(conn, []byte(tail)); err != nil {
 			log.Printf("[mitm][error] write final stream chunk failed: %v", err)
-			return
+			return false
 		}
 	}
 
@@ -629,7 +562,9 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader) {
 	// (Sonlandırma chunk'ı — chunked transfer encoding altında gövdenin sonunu bildirir.)
 	if _, err := conn.Write([]byte("0\r\n\r\n")); err != nil {
 		log.Printf("[mitm][error] write final chunk terminator failed: %v", err)
+		return false
 	}
+	return true
 }
 
 // writeChunk writes data as a single HTTP/1.1 chunked-transfer-encoding chunk:
@@ -645,4 +580,31 @@ func writeChunk(conn *tls.Conn, data []byte) error {
 	}
 	_, err := conn.Write([]byte("\r\n"))
 	return err
+}
+
+func writeMITMError(conn io.Writer, status int, message string) {
+	body := []byte(message + "\n")
+	_, _ = fmt.Fprintf(conn,
+		"HTTP/1.1 %d %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+		status, http.StatusText(status), len(body))
+	_, _ = conn.Write(body)
+}
+
+func readMITMBody(body io.Reader) ([]byte, bool, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxMITMRequestBody+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(raw) > maxMITMRequestBody {
+		return nil, true, nil
+	}
+	return raw, false, nil
+}
+
+func mitmUpstreamURL(authority, path, rawQuery string) string {
+	u := "https://" + authority + path
+	if rawQuery != "" {
+		u += "?" + rawQuery
+	}
+	return u
 }

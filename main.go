@@ -112,7 +112,7 @@ func main() {
 	mux.Handle("/", firewallSrv)
 
 	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.ListenPort),
+		Addr:         loopbackAddr(cfg.ListenPort),
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 6 * time.Minute, // must exceed longest AI response (en uzun AI yanıtını aşmalı)
@@ -150,7 +150,7 @@ func main() {
 
 		mitmProxy := mitm.NewMITMProxy(ca, m, cfg)
 		mitmServer = &http.Server{
-			Addr:         fmt.Sprintf(":%d", cfg.MITMPort),
+			Addr:         loopbackAddr(cfg.MITMPort),
 			Handler:      mitmProxy,
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 6 * time.Minute,
@@ -207,6 +207,13 @@ func main() {
 	log.Printf("[firewall][info] vault cleared — final stats: %+v", finalStats)
 	log.Printf("[firewall][info] metrics snapshot: %+v", metrics.Global.Snapshot(nil))
 	log.Println("[firewall][info] goodbye.")
+}
+
+// loopbackAddr keeps both proxy surfaces local to this machine. The firewall
+// has no client authentication or tenant isolation, so exposing either listener
+// on a LAN would turn it into an unauthenticated gateway/open proxy.
+func loopbackAddr(port int) string {
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
 // localhostOnly is an HTTP middleware that restricts access to requests

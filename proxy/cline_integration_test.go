@@ -147,16 +147,16 @@ func TestClineE2E_NonStreaming_MultiSecret(t *testing.T) {
 		t.Errorf("FAIL: vault labels leaked to client: %s", clientResp)
 	}
 
-	// 6. Vault should have entries.
+	// 6. Completed request scopes must not retain secrets process-wide.
 	stats := v.Stats()
-	if stats.Current < 2 {
-		t.Errorf("FAIL: expected ≥2 vault entries, got %d", stats.Current)
+	if stats.Current != 0 {
+		t.Errorf("FAIL: process-wide vault retained %d entries", stats.Current)
 	}
 
 	t.Logf("✅ PASS — non-streaming multi-secret round-trip")
 	t.Logf("   upstream saw (masked):  ...[[EMAIL_...]]...[[AWS_...]]...")
 	t.Logf("   client received (restored): %s and %s present", fakeEmail, fakeAWSKey)
-	t.Logf("   vault entries: %d", stats.Current)
+	t.Logf("   process-wide vault entries after response: %d", stats.Current)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

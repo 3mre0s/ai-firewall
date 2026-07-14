@@ -142,10 +142,9 @@ func TestEmailMaskingRoundTrip(t *testing.T) {
 		t.Errorf("FAIL: Original email not restored in client response.\nClient received: %s", responseStr)
 	}
 
-	// 4. Vault should have the email stored
-	stats := ts.vault.Stats()
-	if stats.Current == 0 {
-		t.Error("FAIL: Vault is empty, expected email to be stored")
+	// 4. Completed request scopes must not retain secrets process-wide.
+	if stats := ts.vault.Stats(); stats.Current != 0 {
+		t.Fatalf("process-wide vault retained %d secret(s)", stats.Current)
 	}
 
 	// 5. Metrics should reflect masking
@@ -174,21 +173,18 @@ func TestGitHubPATBlocking_VaultFull(t *testing.T) {
 		w.Write([]byte(`{"status":"ok"}`))
 	}
 
-	// Create firewall with vault limit = 1, then fill it
+	// Create firewall with a one-entry request vault.
 	ts := newTestSetup(t, 1, upstreamHandler)
 	defer ts.Close()
 
-	// First, fill the vault with one item
-	ts.vault.Store("[[FILL_00000000]]", "filler-value")
-
-	// Now vault is full. Next masking attempt should fail.
-	// Request with GitHub PAT (exactly 36 chars after ghp_)
+	// Two distinct PATs in one request: the first fills the request scope and
+	// the second must make the whole request fail closed.
 	requestBody := map[string]interface{}{
 		"model": "gpt-4",
 		"messages": []map[string]string{
 			{
 				"role":    "user",
-				"content": "Şu kod satırındaki hatayı düzeltir misin: config.Token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'",
+				"content": "Tokens: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 and ghp_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
 			},
 		},
 	}
@@ -462,14 +458,10 @@ func TestVaultStateAfterMasking(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// ASSERTIONS: Verify vault contains all emails
+	// ASSERTIONS: completed request scopes do not retain secrets globally.
 	stats := ts.vault.Stats()
-	if stats.Current != len(emails) {
-		t.Errorf("FAIL: Expected vault to contain %d items, got %d", len(emails), stats.Current)
-	}
-
-	if stats.TotalHits > 0 {
-		t.Logf("Vault hits: %d (unmask operations occurred)", stats.TotalHits)
+	if stats.Current != 0 {
+		t.Errorf("FAIL: process-wide vault retained %d items", stats.Current)
 	}
 }
 
@@ -585,13 +577,8 @@ func TestPatternMasking_TableDriven(t *testing.T) {
 			}
 			resp.Body.Close()
 
-			// Verify masking occurred
-			stats := ts.vault.Stats()
-			if tc.shouldMask && stats.Current == 0 {
-				t.Error("FAIL: Expected masking but vault is empty")
-			}
-			if !tc.shouldMask && stats.Current > 0 {
-				t.Error("FAIL: Unexpected masking occurred for safe text")
+			if stats := ts.vault.Stats(); stats.Current != 0 {
+				t.Errorf("process-wide vault retained %d item(s)", stats.Current)
 			}
 		})
 	}
@@ -693,19 +680,95 @@ func TestConcurrentRequests_ThreadSafety(t *testing.T) {
 		<-done
 	}
 
-	// Verify vault state is consistent (no race conditions)
+	// Request scopes are wiped independently after each response.
 	stats := ts.vault.Stats()
-	if stats.Current == 0 {
-		t.Error("FAIL: Vault is empty after concurrent requests")
-	}
-	if stats.Current > numRequests {
-		t.Errorf("FAIL: Vault has more items (%d) than requests (%d)", stats.Current, numRequests)
+	if stats.Current != 0 {
+		t.Errorf("FAIL: process-wide vault retained %d items", stats.Current)
 	}
 
 	// Verify metrics are consistent
 	snapshot := metrics.Global.Snapshot(ts.vault)
 	if snapshot.RequestsTotal < int64(numRequests) {
 		t.Errorf("FAIL: RequestsTotal (%d) less than expected (%d)", snapshot.RequestsTotal, numRequests)
+	}
+}
+
+func TestRequestScopesDoNotUnmaskPriorLabels(t *testing.T) {
+	const secret = "first@example.com"
+	var firstMaskedBody string
+	requestNumber := 0
+
+	upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
+		requestNumber++
+		body, _ := io.ReadAll(r.Body)
+		if requestNumber == 1 {
+			firstMaskedBody = string(body)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		_, _ = w.Write([]byte(firstMaskedBody))
+	}
+
+	ts := newTestSetup(t, 10, upstreamHandler)
+	defer ts.Close()
+
+	first, err := http.Post(ts.firewall.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"prompt":"`+secret+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+	second, err := http.Post(ts.firewall.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"prompt":"safe"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	body, _ := io.ReadAll(second.Body)
+
+	if strings.Contains(string(body), secret) {
+		t.Fatalf("a prior request label restored secret data: %s", body)
+	}
+	if !strings.Contains(string(body), "[[EMAIL_") {
+		t.Fatalf("expected the prior unknown label to remain opaque: %s", body)
+	}
+}
+
+func TestCompressedRequestIsRejected(t *testing.T) {
+	upstreamCalled := false
+	ts := newTestSetup(t, 10, func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.firewall.URL+"/v1/chat/completions", strings.NewReader("compressed bytes"))
+	req.Header.Set("Content-Encoding", "gzip")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415", resp.StatusCode)
+	}
+	if upstreamCalled {
+		t.Fatal("compressed request reached upstream")
+	}
+}
+
+func TestCompressedUpstreamResponseIsRejected(t *testing.T) {
+	ts := newTestSetup(t, 10, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write([]byte("compressed bytes"))
+	})
+	defer ts.Close()
+
+	resp, err := http.Post(ts.firewall.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"prompt":"safe"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
 	}
 }
 

@@ -12,7 +12,7 @@ them locally in the response.
 - No account
 - No hosted gateway
 - Telemetry disabled by default
-- Secret mappings kept only in memory
+- Request-scoped secret mappings kept only in memory
 - Open source
 
 [![Go](https://img.shields.io/badge/go-1.22+-blue)](#build-from-source)
@@ -122,7 +122,7 @@ development setup.
 2. The firewall scans the complete request body for supported patterns.
 3. Each detected value is replaced with a typed placeholder such as
    `[[OAI_KEY_A1B2C3D4E5F60718293A4B5C6D7E8F90]]`.
-4. The placeholder-to-secret mapping stays in an in-memory vault.
+4. The placeholder-to-secret mapping stays in an isolated, per-request in-memory vault.
 5. The sanitized request is forwarded to the configured provider.
 6. Placeholders in buffered or SSE responses are restored locally before the
    response reaches the client.
@@ -150,8 +150,7 @@ Detection is pattern-based and deliberately not presented as exhaustive. See
 - Telemetry is disabled by default and requires explicit opt-in in an official
   release binary.
 - Prompt contents are not sent to a project-owned cloud service.
-- Placeholder mappings remain in process memory and are cleared on graceful
-  shutdown.
+- Placeholder mappings are isolated per request and wiped after its response.
 - The source can be inspected and [built locally](#build-from-source).
 - Transparent MITM mode is optional and disabled by default.
 - The trust boundaries and known trade-offs are documented in
@@ -195,7 +194,9 @@ ai-firewall
 
 Point the application or system HTTP proxy at `http://localhost:8082`. In this
 mode request bodies are scanned, while the client's authentication header is
-forwarded unchanged.
+forwarded unchanged. Verify that the application actually uses this proxy;
+traffic that bypasses it is not scanned, and CONNECT targets outside the
+configured AI-host allow-list are rejected.
 
 Remove the CA when finished:
 
@@ -217,7 +218,7 @@ All settings are environment variables; no configuration file is required.
 | `UPSTREAM_URL` | `https://api.anthropic.com` | Upstream provider base URL. |
 | `FIREWALL_PORT` | `8080` | Explicit API proxy port. |
 | `PROVIDER_HINT` | auto-detect | Optional provider adapter override. |
-| `VAULT_SIZE_LIMIT` | `200` | Maximum in-memory placeholder mappings. |
+| `VAULT_SIZE_LIMIT` | `200` | Maximum placeholder mappings per request; the request is rejected with 507 when exceeded. |
 | `MASK_PATHS` | `true` | Mask supported Unix and Windows paths. |
 | `MASK_EMAILS` | `true` | Mask email addresses. |
 | `LOG_LEVEL` | `info` | `silent`, `info`, or `debug`. |

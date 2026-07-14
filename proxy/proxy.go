@@ -129,6 +129,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	metrics.Global.IncRequests()
 	s.logf("info", "→ %s %s [provider: %s]", r.Method, r.URL.Path, s.provider.Name())
 
+	requestMasker := s.masker.NewScope()
+	defer requestMasker.Reset()
+
 	// ── Step 1: Read the full request body ───────────────────────────────────
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -139,7 +142,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// ── Step 2: Mask — sanitise the outgoing payload ─────────────────────────
 	// (Maskeleme — giden yükü temizle)
-	maskResult := s.masker.Mask(string(body))
+	if encoding := strings.TrimSpace(r.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		metrics.Global.IncBlockedRequests()
+		http.Error(w, "compressed request bodies are not supported", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	maskResult := requestMasker.Mask(string(body))
 
 	// Kısmi maskeleme gerçekleştiyse metrikleri kaydet (vault-full durumunda bile).
 	// (Even if vault was full, count whatever was successfully masked.)
@@ -154,7 +163,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// vault was at capacity, we block the request with 507 rather than forwarding
 	// plaintext secrets to the upstream AI.
 	//
-	// Resolution: increase VAULT_SIZE_LIMIT or restart the proxy to clear the vault.
+	// Resolution: increase VAULT_SIZE_LIMIT; the limit applies to this request scope.
 	// (Vault dolu koruması: vault kapasitesi dolduğu için maskelenememiş hassas
 	//  bir değer varsa, düz metin sırları upstream'e iletmek yerine isteği 507
 	//  ile bloklarız.
@@ -196,6 +205,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.copyRequestHeaders(r.Header, upstreamReq.Header)
+	// Response placeholders must remain visible so they can be restored.
+	upstreamReq.Header.Set("Accept-Encoding", "identity")
 
 	// Delegate authentication to the provider — it knows which headers to set.
 	// (Kimlik doğrulamayı sağlayıcıya devret — hangi başlıkları ayarlayacağını bilir.)
@@ -208,6 +219,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		metrics.Global.IncUpstreamErrors()
+		http.Error(w, "compressed upstream response rejected", http.StatusBadGateway)
+		return
+	}
 
 	s.logf("info", "← upstream %d", resp.StatusCode)
 	if resp.StatusCode >= 400 {
@@ -230,21 +246,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ── Step 5: Unmask and deliver the response ───────────────────────────────
 	// (Maskeyi kaldır ve yanıtı teslim et)
 	if isStream {
-		s.handleStream(w, resp.Body)
+		s.handleStream(w, resp.Body, requestMasker)
 	} else {
-		s.handleStandard(w, resp.Body)
+		s.handleStandard(w, resp.Body, requestMasker)
 	}
 }
 
 // handleStandard reads the entire response body, unmasks it, and writes once.
 // (Tüm yanıt gövdesini okur, maskesini kaldırır ve bir kez yazar.)
-func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader) {
+func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader, requestMasker *masker.Masker) {
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		s.logf("error", "reading standard response (standart yanıt okunuyor): %v", err)
 		return
 	}
-	unmasked := s.masker.Unmask(string(raw))
+	unmasked := requestMasker.Unmask(string(raw))
 	// Count unmasked items (replaced labels) for metrics.
 	// (Metrikler için maskeleri kaldırılan öğeleri say.)
 	replaced := strings.Count(string(raw), "[[") - strings.Count(unmasked, "[[")
@@ -274,15 +290,15 @@ func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader) {
 //	(sorunlu chunk'ın kendisi) bastırılır: proxy onu düşürür ve bağlantıyı kapatır,
 //	böylece istemci beklenmedik bir EOF alır. Sır barındıran chunk'tan ÖNCEKİ
 //	chunk'lar etkilenmez.)
-func (s *Server) handleStream(w http.ResponseWriter, body io.Reader) {
+func (s *Server) handleStream(w http.ResponseWriter, body io.Reader, requestMasker *masker.Masker) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		s.logf("warn", "ResponseWriter does not support streaming (akışı desteklemiyor), buffering")
-		s.handleStandard(w, body)
+		s.handleStandard(w, body, requestMasker)
 		return
 	}
 
-	processor := NewStreamProcessor(s.masker)
+	processor := NewStreamProcessor(requestMasker)
 	buf := make([]byte, 4096)
 
 	for {

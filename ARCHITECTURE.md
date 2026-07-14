@@ -68,7 +68,7 @@ github.com/localai/firewall/
 Responsible for reading environment variables (`FIREWALL_PORT`, `UPSTREAM_URL`, etc.). It contains a helper `LoadForTest()` which allows unit tests to spin up configurations without requiring system environment setup.
 
 ### 2. `vault` (Kasa)
-A thread-safe `sync.RWMutex`-guarded storage engine. RWMutex is utilized because unmasking LLM responses triggers many parallel read operations per second, whereas writes only occur on request ingress. It exposes a `Stats()` function implementing `metrics.VaultStatsProvider` to export occupancy data without creating a circular dependency with the `metrics` package.
+A thread-safe `sync.RWMutex`-guarded storage engine. The proxy creates one vault per request/response exchange and wipes it when the response completes. This prevents placeholders observed in one request from restoring secrets belonging to another request.
 
 ### 3. `patterns` (Düzenli İfadeler)
 Houses the compiled regular expressions (`regexp.Regexp`). Patterns are compiled at application startup inside `init()` to guarantee zero heap-allocation during runtime request evaluation.

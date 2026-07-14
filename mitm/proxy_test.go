@@ -1,6 +1,9 @@
 package mitm
 
 import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -78,5 +81,35 @@ func TestIsAIHostExact(t *testing.T) {
 				t.Errorf("isAIHost(%q) = %v, want %v", tc.hostport, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestUnknownConnectTargetIsRejected(t *testing.T) {
+	p := &MITMProxy{aiHosts: buildAIHostsMap()}
+	req := httptest.NewRequest(http.MethodConnect, "http://attacker.invalid", nil)
+	req.Host = "attacker.invalid:443"
+	recorder := httptest.NewRecorder()
+
+	p.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", recorder.Code)
+	}
+}
+
+func TestMITMUpstreamURLPreservesConnectPort(t *testing.T) {
+	got := mitmUpstreamURL("localhost:11434", "/v1/chat", "stream=true")
+	want := "https://localhost:11434/v1/chat?stream=true"
+	if got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+}
+
+func TestReadMITMBodyDetectsOversize(t *testing.T) {
+	_, tooLarge, err := readMITMBody(bytes.NewReader(make([]byte, maxMITMRequestBody+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tooLarge {
+		t.Fatal("oversized body was not rejected")
 	}
 }

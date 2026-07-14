@@ -1,6 +1,6 @@
 # Local AI Firewall
 
-**Your secrets never leave your machine when you use AI coding tools.** A local proxy that strips API keys, passwords, and personal data out of your prompts before they reach Claude, OpenAI, Gemini, or any other provider — and restores them in the responses. No cloud, no account, no telemetry.
+**Reduce accidental secret disclosure when using AI coding tools.** A local, best-effort proxy that detects known API-key, password, path, and personal-data formats in prompts before they reach supported providers, then restores them in responses. No cloud component, account, or telemetry.
 
 [![Go](https://img.shields.io/badge/go-1.22+-blue)](#build-from-source)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
@@ -10,7 +10,7 @@
 
 |                             | Local AI Firewall  | Typical cloud gateway (Lakera, Nightfall, Portkey…)         |
 |-----------------------------|--------------------|--------------------------------------------------------------|
-| Sends your data off-machine | No                 | Yes — prompts pass through their servers                     |
+| Adds another gateway data processor | No — traffic goes directly from the local proxy to your AI provider | Yes — prompts also pass through the gateway vendor |
 | Install                     | Single binary, no account | Sign up, configure API keys, often SDK integration    |
 | Cost                        | Free, AGPL-3.0     | Usage-based pricing                                          |
 | Works offline-first         | Yes                | No — depends on their service being up                       |
@@ -57,10 +57,10 @@ code --install-extension local-ai-firewall.vsix
 
 Most secret-redaction tools ask you to reconfigure each client — change a base URL, run a Docker container, route through a hosted gateway. This one is built to disappear:
 
-- **Zero configuration** — transparent MITM mode intercepts HTTPS directly. Install the local CA once with a single command, and every AI tool on your machine is protected without touching its settings.
+- **Centralised local control** — transparent MITM mode can intercept HTTPS for an explicit allow-list of AI hosts. It requires installing the local CA and pointing the application or system proxy at the local listener.
 - **Zero telemetry** — nothing phones home. No account, no cloud component, no usage tracking. The metrics dashboard is bound to localhost and refuses any non-loopback request.
 - **Single static binary** — no runtime, no dependencies, no container. Download one file and run it. Cross-compiled for Linux, macOS, and Windows.
-- **Secrets stay in memory** — the token-to-secret mapping lives in an in-memory vault that is never written to disk and is wiped on shutdown.
+- **Request-scoped vaults** — each token-to-secret mapping lives only in memory for one request/response exchange and is wiped when that exchange completes.
 
 If you prefer explicit control over transparent interception, an environment-variable proxy mode is available too — see [Quick start](#quick-start).
 
@@ -70,7 +70,7 @@ If you prefer explicit control over transparent interception, an environment-var
 
 Every time you paste a stack trace, a config file, or a code snippet into Claude Code, Copilot, Cursor, or ChatGPT, there's a real chance it carries something you didn't mean to share: an API key, a database password, a file path that leaks your username, an email address. That data goes to a server you don't control.
 
-Local AI Firewall sits between your AI tool and the provider. It scans each outgoing request, replaces every detected secret with a short placeholder like `[[OAI_KEY_A1B2C3D4]]`, and forwards the sanitised text. When the response comes back, it swaps the placeholders for the originals before your client sees them. The model gets enough context to stay useful; your secrets stay on your machine.
+Local AI Firewall sits between your AI tool and the provider. It scans each proxied request, replaces detected values with short placeholders such as `[[OAI_KEY_A1B2C3D4]]`, and forwards the resulting text. When the response comes back, it swaps placeholders from that request for the originals before your client sees them. Detection is format-specific and best-effort; values that do not match a supported pattern pass through unchanged.
 
 ```
   Your machine
@@ -84,7 +84,7 @@ Local AI Firewall sits between your AI tool and the provider. It scans each outg
   └─────────────────────────────────────────────────────────┘
 ```
 
-Secrets are masked on the way out and restored on the way back. The provider only ever sees placeholders.
+Detected values are masked on the way out and restored on the way back. The provider sees placeholders for values the configured patterns recognise.
 
 ---
 
@@ -131,7 +131,7 @@ export MITM_ENABLED=true
 ai-firewall
 ```
 
-Point your system or application HTTP proxy at `http://localhost:8082` and you're protected. To remove the CA later: `ai-firewall uninstall-ca`.
+Point your system or application HTTP proxy at `http://localhost:8082`. Verify the application actually uses that proxy; traffic that bypasses it is not scanned. To remove the CA later: `ai-firewall uninstall-ca`.
 
 In transparent mode your AI tool sends its own credentials as usual — the firewall does **not** touch the `x-api-key` or `Authorization` header, so authentication keeps working exactly as before. The firewall only scans and masks the **request body**; your auth key passes through untouched. (This differs from explicit proxy mode below, where the firewall injects `FORWARD_API_KEY` upstream on your behalf.)
 
@@ -206,7 +206,7 @@ All settings come from environment variables. No config file is needed or suppor
 | `UPSTREAM_URL` | `https://api.anthropic.com` | Base URL of the upstream AI provider. Trailing slash is stripped automatically. |
 | `FIREWALL_PORT` | `8080` | TCP port the API proxy listens on. |
 | `PROVIDER_HINT` | *(auto-detect)* | Force a specific provider adapter instead of detecting from `UPSTREAM_URL`. Valid values: `anthropic`, `openai`, `gemini`, `groq`, `together`, `perplexity`, `mistral`, `cohere`, `deepseek`, `xai`, `ollama`, `lmstudio`, `azure`, `generic`. |
-| `VAULT_SIZE_LIMIT` | `1000` | Maximum number of token→secret entries held in memory. Once reached, the request is rejected with 507 Insufficient Storage to prevent silent data leakage. Increase the limit or restart the proxy to clear the vault. |
+| `VAULT_SIZE_LIMIT` | `1000` | Maximum token→secret entries per request. Once reached, that request is rejected with 507 Insufficient Storage to prevent silent data leakage. |
 | `MASK_PATHS` | `true` | Detect and mask Unix and Windows filesystem paths. |
 | `MASK_EMAILS` | `true` | Detect and mask email addresses (PII). |
 | `LOG_LEVEL` | `info` | Verbosity: `silent` \| `info` \| `debug`. |
@@ -257,7 +257,7 @@ In SSE streaming mode each chunk is processed as it arrives. A secret whose byte
 
 ### Vault lifecycle
 
-The in-memory vault is cleared on graceful shutdown (`SIGINT` / `SIGTERM`). In-flight requests are allowed to complete before the wipe, preventing a race between active unmask operations and the reset.
+Each request/response exchange has an isolated in-memory vault. It is wiped when that exchange completes, so a placeholder from one request cannot restore a secret from another request.
 
 ---
 

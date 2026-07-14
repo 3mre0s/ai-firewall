@@ -134,7 +134,11 @@ spec:
 
 ## 3. Standalone Gateway Deployment
 
-If you prefer to run the firewall as a shared internal company service, deploy it as a standalone service inside your cluster:
+**Not supported.** Do not expose the current firewall as a shared service. It intentionally binds to loopback and does not implement client authentication, authorization, tenant policy, rate limiting, or a multi-tenant secret boundary. Run one sidecar per application workload instead.
+
+The following former shared-gateway example is intentionally removed because it could expose a provider credential for unauthorised use and would imply security guarantees the current architecture does not provide.
+
+<!--
 
 ```yaml
 apiVersion: v1
@@ -197,3 +201,4 @@ spec:
               port: 8080
 ```
 Then point all cluster services to `http://ai-firewall-gateway.security.svc.cluster.local` as their AI API host.
+-->

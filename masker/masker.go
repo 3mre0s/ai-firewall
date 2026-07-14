@@ -48,6 +48,18 @@ func New(v *vault.Vault, cfg *config.Config) *Masker {
 	}
 }
 
+// NewScope returns an isolated masker for a single request/response lifetime.
+// A provider sees the placeholders sent upstream; keeping labels process-wide
+// would let a placeholder from one request restore a secret in another.
+func (m *Masker) NewScope() *Masker {
+	return New(vault.New(m.cfg.VaultSizeLimit), m.cfg)
+}
+
+// Reset clears all secrets retained by this masker scope.
+func (m *Masker) Reset() {
+	m.vault.Reset()
+}
+
 // ── Label generation (Etiket üretme) ─────────────────────────────────────────
 
 // generateLabel returns a unique, bracket-delimited placeholder.

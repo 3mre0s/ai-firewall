@@ -4,6 +4,7 @@ ai-firewall.exe
 ai-firewall-*
 *.exe
 dist/
+.release-dist/
 
 # ── MITM CA key / cert (never commit private key material) ───────────────────
 ca.key

@@ -18,7 +18,31 @@ By submitting a pull request or otherwise contributing code, documentation, or o
 
 ## How to contribute
 
+### Local setup
+
+Requires Go 1.22 or later. Node.js 20 is needed only for VS Code extension changes.
+
+```bash
+git clone https://github.com/3mre0s/ai-firewall.git
+cd ai-firewall
+go test ./...
+go run . demo
+```
+
+Use only synthetic credentials in tests, logs, screenshots, and issues. Run the local mock upstream with `go run ./scripts/mock-upstream --port 19999` when testing proxy behavior without contacting an AI provider.
+
+### Before opening a pull request
+
 - Open an issue before starting significant work — alignment up front saves effort.
 - Follow the existing code style (`go fmt`, `go vet` clean).
 - All submissions must pass `go test ./...`.
 - Keep pull requests focused; one logical change per PR.
+
+```bash
+gofmt -w .
+go vet ./...
+go test ./... -race -count=1
+go build ./...
+```
+
+Never report a real secret or an exploitable vulnerability in a public issue. Follow [SECURITY.md](SECURITY.md) for private disclosure.

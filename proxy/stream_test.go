@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/3mre0s/ai_firewall/config"
-	"github.com/3mre0s/ai_firewall/masker"
-	"github.com/3mre0s/ai_firewall/vault"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // newTestMaskerWithVault creates a Masker and returns both, so the test can

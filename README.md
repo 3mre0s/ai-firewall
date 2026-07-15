@@ -18,6 +18,9 @@ them locally in the response.
 [![Go](https://img.shields.io/badge/go-1.22+-blue)](#build-from-source)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![CI](https://github.com/3mre0s/ai-firewall/actions/workflows/ci.yml/badge.svg)](https://github.com/3mre0s/ai-firewall/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/3mre0s/ai-firewall)](https://github.com/3mre0s/ai-firewall/releases/latest)
+[![GitHub stars](https://img.shields.io/github/stars/3mre0s/ai-firewall)](https://github.com/3mre0s/ai-firewall/stargazers)
+[![Go Report Card](https://goreportcard.com/badge/github.com/3mre0s/ai-firewall)](https://goreportcard.com/report/github.com/3mre0s/ai-firewall)
 
 ![Local AI Firewall demo](docs/demo.gif)
 
@@ -42,16 +45,17 @@ and does not intercept unrelated HTTPS traffic.
 
 ### 1. Install
 
-Requires Go 1.22 or later:
+Download the archive for your platform from the [latest release](../../releases/latest). Linux amd64 example:
 
 ```bash
-git clone https://github.com/3mre0s/ai-firewall.git
-cd ai-firewall
-go build -trimpath -ldflags "-s -w" -o ai-firewall .
-./ai-firewall version
+curl -LO https://github.com/3mre0s/ai-firewall/releases/latest/download/ai-firewall-linux-amd64.tar.gz
+curl -LO https://github.com/3mre0s/ai-firewall/releases/latest/download/checksums.txt
+sha256sum --check checksums.txt --ignore-missing
+tar -xzf ai-firewall-linux-amd64.tar.gz
+install -m 0755 ai-firewall "$HOME/.local/bin/ai-firewall"
 ```
 
-On Windows, build with `-o ai-firewall.exe` and run `./ai-firewall.exe version`.
+Windows users should download `ai-firewall-windows-amd64.zip`, verify its SHA-256 value against `checksums.txt`, and place `ai-firewall.exe` on `PATH`.
 
 ### 2. Start the firewall
 
@@ -153,6 +157,7 @@ Detection is pattern-based and deliberately not presented as exhaustive. See
 - Placeholder mappings remain in process memory and are cleared on graceful
   shutdown.
 - The source can be inspected and [built locally](#build-from-source).
+- Every release includes `checksums.txt` covering all platform archives and the VS Code extension.
 - Transparent MITM mode is optional and disabled by default.
 - The trust boundaries and known trade-offs are documented in
   [THREAT_MODEL.md](THREAT_MODEL.md).

@@ -54,7 +54,7 @@ sequenceDiagram
 The codebase is split into 7 isolated packages to prevent circular dependencies and follow clean architecture practices:
 
 ```
-github.com/localai/firewall/
+github.com/3mre0s/ai-firewall/
 ├── config/             - Application settings, default values, env-var loader.
 ├── vault/              - In-memory thread-safe key-value vault.
 ├── patterns/           - Regular expressions registry grouped by sensitivity categories.

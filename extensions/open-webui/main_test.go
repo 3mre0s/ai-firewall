@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/3mre0s/ai_firewall/config"
-	"github.com/3mre0s/ai_firewall/masker"
-	"github.com/3mre0s/ai_firewall/vault"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // newTestMasker builds a single masker backed by a fresh vault of the given

@@ -1,25 +1,25 @@
 class AiFirewall < Formula
   desc "Local proxy that strips secrets from AI prompts before they reach any provider"
   homepage "https://github.com/3mre0s/ai-firewall"
-  version "0.1.1"
+  version "0.1.2"
   license "AGPL-3.0-or-later"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.1/ai-firewall-darwin-arm64.tar.gz"
+      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.2/ai-firewall-darwin-arm64.tar.gz"
       sha256 "REPLACE_WITH_DARWIN_ARM64_SHA256"
     else
-      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.1/ai-firewall-darwin-amd64.tar.gz"
+      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.2/ai-firewall-darwin-amd64.tar.gz"
       sha256 "REPLACE_WITH_DARWIN_AMD64_SHA256"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.1/ai-firewall-linux-arm64.tar.gz"
+      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.2/ai-firewall-linux-arm64.tar.gz"
       sha256 "REPLACE_WITH_LINUX_ARM64_SHA256"
     else
-      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.1/ai-firewall-linux-amd64.tar.gz"
+      url "https://github.com/3mre0s/ai-firewall/releases/download/v0.1.2/ai-firewall-linux-amd64.tar.gz"
       sha256 "REPLACE_WITH_LINUX_AMD64_SHA256"
     end
   end

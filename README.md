@@ -55,6 +55,15 @@ tar -xzf ai-firewall-linux-amd64.tar.gz
 install -m 0755 ai-firewall "$HOME/.local/bin/ai-firewall"
 ```
 
+> **macOS not:** İlk çalıştırmada Gatekeeper "cannot be opened because the developer cannot be verified"
+> uyarısı gösterebilir (binary code-signed/notarized değil). Şu komutla quarantine flag'ini kaldırabilirsiniz:
+>
+> ```bash
+> xattr -d com.apple.quarantine ai-firewall
+> ```
+>
+> Alternatif: System Settings → Privacy & Security → "Open Anyway"
+
 Windows users should download `ai-firewall-windows-amd64.zip`, verify its SHA-256 value against `checksums.txt`, and place `ai-firewall.exe` on `PATH`.
 
 ### 2. Start the firewall

@@ -35,6 +35,7 @@ jobs:
         working-directory: extensions/vscode
         run: |
           npm ci
+          mkdir -p ../../dist
           npx vsce package --out ../../dist/local-ai-firewall.vsix
 
       - name: Run GoReleaser

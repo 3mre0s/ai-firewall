@@ -43,7 +43,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/3mre0s/ai_firewall/config"
+	"github.com/3mre0s/ai-firewall/config"
 )
 
 // loadConfig builds a realistic config for the load harness: the real test

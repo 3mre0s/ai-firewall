@@ -3,6 +3,7 @@
 // sensitive data in transit.
 //
 // (Bilinen AI sağlayıcılarına yapılan TLS bağlantılarını yakalayan şeffaf bir
+//
 //	Ortadaki Adam (MITM) proxy'si uygular. Güvenlik duvarının aktarım sırasında
 //	hassas verileri maskelemesini/maskesini kaldırmasını sağlar.)
 package mitm
@@ -19,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/3mre0s/ai_firewall/config"
-	"github.com/3mre0s/ai_firewall/masker"
-	"github.com/3mre0s/ai_firewall/proxy"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/proxy"
 )
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -49,14 +50,15 @@ func (l *limitedReadCloser) Close() error {
 // For non-AI hosts, it creates a blind TCP tunnel (no TLS interception).
 //
 // (HTTP CONNECT isteklerini işleyerek AI sağlayıcılarına yapılan TLS trafiğini
+//
 //	yakalar. AI ana bilgisayarları için dinamik olarak oluşturulan yaprak sertifikalar
 //	ile TLS sonlandırması yapar, hassas verileri maskele, gerçe API'ye iletir ve
 //	yanıtların maskelerini kaldırır. AI olmayan ana bilgisayarlar için kör TCP
 //	tüneli oluşturur (TLS müdahalesi olmaz).)
 type MITMProxy struct {
-	ca    *CA
+	ca     *CA
 	masker *masker.Masker
-	cfg   *config.Config
+	cfg    *config.Config
 
 	// aiHosts maps hostnames to their provider patterns for interception.
 	// If a CONNECT request targets a host in this map, TLS is intercepted.
@@ -79,9 +81,9 @@ func NewMITMProxy(ca *CA, m *masker.Masker, cfg *config.Config) *MITMProxy {
 	aiHosts := buildAIHostsMap()
 
 	return &MITMProxy{
-		ca:    ca,
-		masker: m,
-		cfg:   cfg,
+		ca:      ca,
+		masker:  m,
+		cfg:     cfg,
 		aiHosts: aiHosts,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
@@ -102,6 +104,7 @@ func NewMITMProxy(ca *CA, m *masker.Masker, cfg *config.Config) *MITMProxy {
 // buildAIHostsMap creates a map of known AI provider hostnames for interception.
 // Extracted from providers' Matches() patterns.
 // (Bilinen AI sağlayıcı ana bilgisayar adlarını müdahale için haritalar.
+//
 //	Sağlayıcıların Matches() desenlerinden çıkarılır.)
 func buildAIHostsMap() map[string]bool {
 	return map[string]bool{
@@ -111,7 +114,7 @@ func buildAIHostsMap() map[string]bool {
 		"api.openai.com": true,
 		// Google
 		"generativelanguage.googleapis.com": true,
-		"aiplatform.googleapis.com":       true,
+		"aiplatform.googleapis.com":         true,
 		// Groq
 		"api.groq.com": true,
 		// Together AI
@@ -143,6 +146,7 @@ func buildAIHostsMap() map[string]bool {
 // to prevent hostile hostnames like "evil-ollama.attacker.com" from being intercepted.
 //
 // (CONNECT isteğinde alınan host:port'un maskeleme için yakalanıp yakalanmayacağını
+//
 //	kontrol eder. Eşleştirme kesindir — alt dize kontrolü yoktur — "evil-ollama.attacker.com"
 //	gibi düşmanca hostname'lerin yakalanmasını önlemek için.)
 func (p *MITMProxy) isAIHost(hostport string) bool {
@@ -185,6 +189,7 @@ func (p *MITMProxy) isAIHost(hostport string) bool {
 // establishing TLS tunnels. All other requests receive a 405 Method Not Allowed.
 //
 // (Gelen istekleri işler. Yalnızca CONNECT yöntemi, TLS tünelleri kurmak için
+//
 //	desteklenir. Diğer tüm istekler 405 Yöntem Izin Verilmiyor yanıtı alır.)
 func (p *MITMProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodConnect {
@@ -230,6 +235,7 @@ func (p *MITMProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // No TLS interception is performed; data is relayed byte-for-byte.
 //
 // (AI olmayan trafik için ham TCP tüneli oluşturur.
+//
 //	TLS müdahalesi yapılmaz; veriler bayt bayt iletilir.)
 func (p *MITMProxy) handleBlindTunnel(w http.ResponseWriter, r *http.Request, host string) {
 	// Send 200 Connection Established to client.
@@ -283,6 +289,7 @@ func (p *MITMProxy) handleBlindTunnel(w http.ResponseWriter, r *http.Request, ho
 // forwards to the real API, and unmasks the response.
 //
 // (AI ana bilgisayarları için TLS müdahalesini işler.
+//
 //	MITM el sıkışmasını yapar, HTTP isteğini şifresini çözer, hassas verileri maskele,
 //	gerçek API'ye iletir ve yanıtın maskesini kaldırır.)
 func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, host string) {
@@ -635,7 +642,8 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader) {
 // writeChunk writes data as a single HTTP/1.1 chunked-transfer-encoding chunk:
 // the size in hex, CRLF, the data itself, then a trailing CRLF.
 // (Veriyi tek bir HTTP/1.1 chunked-transfer-encoding parçası olarak yazar:
-//  onaltılık boyut, CRLF, verinin kendisi, ardından sonda CRLF.)
+//
+//	onaltılık boyut, CRLF, verinin kendisi, ardından sonda CRLF.)
 func writeChunk(conn *tls.Conn, data []byte) error {
 	if _, err := fmt.Fprintf(conn, "%x\r\n", len(data)); err != nil {
 		return err

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/3mre0s/ai_firewall/metrics"
+	"github.com/3mre0s/ai-firewall/metrics"
 )
 
 var (

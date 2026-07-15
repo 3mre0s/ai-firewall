@@ -26,13 +26,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/3mre0s/ai_firewall/config"
-	"github.com/3mre0s/ai_firewall/masker"
-	"github.com/3mre0s/ai_firewall/metrics"
-	"github.com/3mre0s/ai_firewall/mitm"
-	"github.com/3mre0s/ai_firewall/proxy"
-	"github.com/3mre0s/ai_firewall/telemetry"
-	"github.com/3mre0s/ai_firewall/vault"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/metrics"
+	"github.com/3mre0s/ai-firewall/mitm"
+	"github.com/3mre0s/ai-firewall/proxy"
+	"github.com/3mre0s/ai-firewall/telemetry"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // version is set at build time via -ldflags "-X main.version=<tag>".

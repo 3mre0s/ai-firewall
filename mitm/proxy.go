@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/masker"
-	"github.com/localai/firewall/proxy"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/proxy"
 )
 
 // ════════════════════════════════════════════════════════════════════════════

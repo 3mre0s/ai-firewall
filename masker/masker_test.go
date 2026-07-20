@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/vault"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // ── helpers (yardımcılar) ──────────────────────────────────────────────────────
@@ -1115,5 +1115,20 @@ func TestMaskDeduplication(t *testing.T) {
 	// The rest of the string should contain the exact same label
 	if !strings.Contains(result.Text[idx1+20:], label) {
 		t.Errorf("expected the exact same label to be reused, output: %q", result.Text)
+	}
+}
+
+func TestMaskDoesNotNestSpecificTokenInsideAssignment(t *testing.T) {
+	m := newTestMasker(10)
+	secret := "sk-proj-FAKE_NESTED_TEST_000000000000"
+	result := m.Mask("api_key=" + secret)
+	if result.MaskedCount != 1 {
+		t.Fatalf("MaskedCount = %d, want 1; text=%q detections=%#v", result.MaskedCount, result.Text, result.Detections)
+	}
+	if len(result.Detections) != 1 || result.Detections[0].Name != "OpenAI API Key" {
+		t.Fatalf("unexpected detections: %#v", result.Detections)
+	}
+	if got := m.Unmask(result.Text); got != "api_key="+secret {
+		t.Fatalf("single-pass Unmask() = %q", got)
 	}
 }

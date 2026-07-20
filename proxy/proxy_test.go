@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/masker"
-	"github.com/localai/firewall/metrics"
-	"github.com/localai/firewall/vault"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/metrics"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // ══════════════════════════════════════════════════════════════════════════════

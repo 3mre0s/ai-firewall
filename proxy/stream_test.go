@@ -1,12 +1,13 @@
 package proxy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/masker"
-	"github.com/localai/firewall/vault"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // newTestMaskerWithVault creates a Masker and returns both, so the test can
@@ -134,5 +135,35 @@ func TestStreamProcessorNoLabels(t *testing.T) {
 
 	if got := out + tail; got != plain {
 		t.Errorf("[FAIL] no-labels: got %q, want %q", got, plain)
+	}
+}
+
+func TestStreamProcessorRestoresPlaceholderAtEveryBoundary(t *testing.T) {
+	m, _ := newTestMaskerWithVault(10)
+	secret := "ghp_FAKEBOUNDARY000000000000000000000000"
+	result := m.Mask(secret)
+	if len(result.Detections) != 1 {
+		t.Fatalf("detections = %#v", result.Detections)
+	}
+	label := result.Detections[0].PlaceholderID
+	want := "prefix " + secret + " suffix"
+
+	for boundary := 1; boundary < len(label); boundary++ {
+		t.Run(fmt.Sprintf("byte_%d", boundary), func(t *testing.T) {
+			processor := NewStreamProcessor(m)
+			var got strings.Builder
+			got.WriteString(processor.Process([]byte("prefix " + label[:boundary])))
+			got.WriteString(processor.Process([]byte(label[boundary:] + " suffix")))
+			got.WriteString(processor.Flush())
+			if processor.LeakDetected() {
+				t.Fatal("placeholder split was classified as a leak")
+			}
+			if processor.RestoredCount() != 1 {
+				t.Fatalf("RestoredCount = %d, want 1", processor.RestoredCount())
+			}
+			if got.String() != want {
+				t.Fatalf("restored stream = %q, want %q", got.String(), want)
+			}
+		})
 	}
 }

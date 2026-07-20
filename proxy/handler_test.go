@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/masker"
-	"github.com/localai/firewall/vault"
+	"github.com/3mre0s/ai-firewall/audit"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 func TestServerPipelineStandard(t *testing.T) {
@@ -238,8 +239,9 @@ func TestServerSSRFProtection(t *testing.T) {
 func TestServerPipelineAuthPassthrough(t *testing.T) {
 	t.Parallel()
 
-	// 1. Upstream checks that it receives the client's Authorization header,
-	// and does NOT receive x-api-key since forward API key is "none".
+	// 1. Upstream checks that it receives the client's authentication headers,
+	// including the account selector used by ChatGPT-authenticated Codex, and
+	// does NOT receive x-api-key since forward API key is "none".
 	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if auth != "Bearer client-supplied-token" {
@@ -248,6 +250,9 @@ func TestServerPipelineAuthPassthrough(t *testing.T) {
 		xkey := r.Header.Get("x-api-key")
 		if xkey != "" {
 			t.Errorf("upstream received x-api-key in passthrough mode: %q", xkey)
+		}
+		if accountID := r.Header.Get("ChatGPT-Account-ID"); accountID != "account-test" {
+			t.Errorf("upstream did not receive ChatGPT account header, got %q", accountID)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -266,6 +271,7 @@ func TestServerPipelineAuthPassthrough(t *testing.T) {
 	// 3. Make client request with Authorization header
 	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(`{}`))
 	req.Header.Set("Authorization", "Bearer client-supplied-token")
+	req.Header.Set("ChatGPT-Account-ID", "account-test")
 	req.Header.Set("Content-Type", "application/json")
 
 	rr := httptest.NewRecorder()
@@ -273,6 +279,135 @@ func TestServerPipelineAuthPassthrough(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected proxy status 200, got %d", rr.Code)
+	}
+}
+
+func TestServerCodexChatGPTRouteAndHeaders(t *testing.T) {
+	t.Parallel()
+
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/codex/responses" {
+			t.Errorf("upstream path = %q, want ChatGPT Codex Responses path", r.URL.Path)
+		}
+		for header, want := range map[string]string{
+			"Authorization":      "Bearer chatgpt-test-token",
+			"ChatGPT-Account-ID": "account-test",
+			"Originator":         "codex_cli_rs",
+		} {
+			if got := r.Header.Get(header); got != want {
+				t.Errorf("upstream %s = %q, want %q", header, got, want)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":[]}`))
+	}))
+	defer mockUpstream.Close()
+
+	cfg := config.LoadForTest()
+	cfg.ForwardAPIKey = "none"
+	cfg.UpstreamURL = mockUpstream.URL + "/backend-api/codex"
+	cfg.ProviderHint = "openai"
+	srv := NewServer(cfg, masker.New(vault.New(10), cfg))
+
+	req := httptest.NewRequest("POST", "/responses", bytes.NewBufferString(`{"input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer chatgpt-test-token")
+	req.Header.Set("ChatGPT-Account-ID", "account-test")
+	req.Header.Set("Originator", "codex_cli_rs")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected proxy status 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestServerBlocksRawSecretInStandardResponse(t *testing.T) {
+	t.Parallel()
+	const fakeToken = "ghp_FAKEDEMO0000000000000000000000000000"
+
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":"` + fakeToken + `"}`))
+	}))
+	defer mockUpstream.Close()
+
+	cfg := config.LoadForTest()
+	cfg.ForwardAPIKey = "none"
+	cfg.UpstreamURL = mockUpstream.URL
+	cfg.ProviderHint = "openai"
+	traces := audit.NewStore(10)
+	srv := NewServer(cfg, masker.New(vault.New(10), cfg), traces)
+
+	req := httptest.NewRequest("POST", "/responses", bytes.NewBufferString(`{"input":"`+fakeToken+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if strings.Contains(rr.Body.String(), fakeToken) {
+		t.Fatal("raw secret from standard upstream response reached the client")
+	}
+	got := traces.List()
+	if len(got) != 1 || !got[0].ResponseLeakBlocked || got[0].RestoredItems != 0 {
+		t.Fatalf("unexpected response leak trace: %#v", got)
+	}
+}
+
+func TestServerRestoresPlaceholderDespiteUnrelatedResponsePath(t *testing.T) {
+	t.Parallel()
+	const fakeToken = "ghp_FAKEDEMO0000000000000000000000000000"
+
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(append(body, []byte("\n/home/model/workspace/result.txt")...))
+	}))
+	defer mockUpstream.Close()
+
+	cfg := config.LoadForTest()
+	cfg.ForwardAPIKey = "none"
+	cfg.UpstreamURL = mockUpstream.URL
+	cfg.ProviderHint = "openai"
+	traces := audit.NewStore(10)
+	srv := NewServer(cfg, masker.New(vault.New(10), cfg), traces)
+
+	req := httptest.NewRequest("POST", "/responses", bytes.NewBufferString(`{"input":"`+fakeToken+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if !strings.Contains(rr.Body.String(), fakeToken) {
+		t.Fatalf("known placeholder was not restored: %s", rr.Body.String())
+	}
+	got := traces.List()
+	if len(got) != 1 || got[0].ResponseLeakBlocked || got[0].RestoredItems != 1 {
+		t.Fatalf("unexpected restoration trace: %#v", got)
+	}
+}
+
+func TestServerAllowsCodexModelCatalogGET(t *testing.T) {
+	t.Parallel()
+
+	mockUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/backend-api/codex/models" {
+			t.Errorf("upstream request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	defer mockUpstream.Close()
+
+	cfg := config.LoadForTest()
+	cfg.ForwardAPIKey = "none"
+	cfg.UpstreamURL = mockUpstream.URL + "/backend-api/codex"
+	cfg.ProviderHint = "openai"
+	srv := NewServer(cfg, masker.New(vault.New(10), cfg))
+
+	req := httptest.NewRequest("GET", "/models?client_version=0.137.0", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("model catalog status = %d, want 200", rr.Code)
 	}
 }
 

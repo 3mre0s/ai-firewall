@@ -2,8 +2,12 @@
 ai-firewall
 ai-firewall.exe
 ai-firewall-*
+anonmyz
+anonmyz.exe
+anonmyz-*
 *.exe
 dist/
+.release-dist/
 
 # ── MITM CA key / cert (never commit private key material) ───────────────────
 ca.key
@@ -18,6 +22,7 @@ ca.crt
 *.test
 *.out
 vendor/
+.gocache/
 coverage.*
 
 # ── Node.js ───────────────────────────────────────────────────────────────────
@@ -30,3 +35,4 @@ node_modules/
 *.swp
 *.swo
 .DS_Store
+.aider*

@@ -1,0 +1,44 @@
+name: Missed secret pattern
+description: Report a secret format that was not masked, using synthetic examples only.
+title: "[new-pattern] "
+labels: ["new-pattern"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste a real secret. If exploitation or real exposure is involved, stop and follow SECURITY.md.
+  - type: input
+    id: provider
+    attributes:
+      label: Secret or provider format
+      placeholder: Fireworks AI API key
+    validations:
+      required: true
+  - type: textarea
+    id: synthetic
+    attributes:
+      label: Synthetic example
+      description: Provide an invalid, non-working value that preserves the documented shape.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: specification
+    attributes:
+      label: Public format documentation
+      description: Link to authoritative documentation and describe prefixes, length, alphabet, or checksum rules.
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include version, provider adapter, and a minimal sanitized request.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I confirm the example is synthetic and cannot authenticate to any service.
+          required: true

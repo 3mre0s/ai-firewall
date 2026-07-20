@@ -7,11 +7,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/localai/firewall.git",
+    "url": "https://github.com/3mre0s/ai-firewall.git",
     "directory": "extensions/vscode"
   },
   "bugs": {
-    "url": "https://github.com/localai/firewall/issues"
+    "url": "https://github.com/3mre0s/ai-firewall/issues"
   },
   "engines": {
     "vscode": "^1.88.0"

@@ -1,12 +1,14 @@
 .PHONY: build test vet clean docker run release
 
-VERSION ?= dev
-BINARY  := ai-firewall
+VERSION       ?= dev
+BINARY        := anonmyz
+LEGACY_BINARY := ai-firewall
 
 # ── Development ───────────────────────────────────────────────────────────────
 
 build:
 	CGO_ENABLED=0 go build -ldflags="-w -s -X main.version=$(VERSION)" -o $(BINARY) .
+	CGO_ENABLED=0 go build -ldflags="-w -s -X main.version=$(VERSION)" -o $(LEGACY_BINARY) .
 
 test:
 	go test ./... -v -count=1 -race -timeout 60s
@@ -16,6 +18,7 @@ vet:
 
 clean:
 	rm -f $(BINARY) $(BINARY).exe
+	rm -f $(LEGACY_BINARY) $(LEGACY_BINARY).exe
 	rm -rf dist/
 
 # Run locally with .env loaded (Linux/macOS).

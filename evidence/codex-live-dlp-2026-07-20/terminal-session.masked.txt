@@ -1,0 +1,31 @@
+PowerShell terminal session — sensitive test value masked for retention
+Test date: 2026-07-20 20:02 TRT (UTC+03:00)
+
+PS C:\Users\emrem\Downloads\Aİ firewall> .\anonmyz-fixed.exe codex --port 9191 -- exec --ignore-user-config --ephemeral "Yalnızca şu değeri aynen tekrar et: [FAKE_GITHUB_PAT_REDACTED]"
+[ANONMYZ] Codex model traffic -> http://127.0.0.1:9191 -> https://chatgpt.com/backend-api/codex
+[ANONMYZ] Privacy trace: http://127.0.0.1:9191/dashboard
+2026-07-20T17:02:35.976090Z ERROR codex_models_manager::cache: failed to load models cache: unknown variant `max`, expected one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh` at line 29 column 25
+OpenAI Codex v0.137.0
+--------
+workdir: C:\Users\emrem\Downloads\Aİ firewall
+model: gpt-5.5
+provider: anonmyz
+approval: never
+sandbox: read-only
+reasoning effort: none
+reasoning summaries: none
+session id: 019f807a-c140-7a63-bb76-5bc45b4a4499
+--------
+user
+Yalnızca şu değeri aynen tekrar et: [FAKE_GITHUB_PAT_REDACTED]
+codex
+[FAKE_GITHUB_PAT_REDACTED]
+tokens used
+9.635
+[ANONMYZ] Session evidence (metadata only; raw values never retained)
+[ANONMYZ] request=req_cd60b21b91ef path=/responses status=200 detections=1 restored=3 response_blocked=false
+[ANONMYZ] prevented=true type=GitHub Personal Access Token v1 placeholder=[[GH_PAT_D39A3558]]
+[ANONMYZ] VERIFIED: 1 sensitive occurrence(s) prevented before upstream and safely restored
+PS C:\Users\emrem\Downloads\Aİ firewall>
+
+Sanitization note: Every occurrence of the intentionally fake test token was replaced with [FAKE_GITHUB_PAT_REDACTED]. No ChatGPT authentication header or credential was captured.

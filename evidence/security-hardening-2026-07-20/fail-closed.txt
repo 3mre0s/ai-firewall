@@ -1,0 +1,13 @@
+Command:
+go run .\scripts\verify-codex-fail-closed
+
+Result (exit code 0, duration 85.2 seconds):
+[PASS] Codex request first traversed the real loopback Anonmyz proxy
+[PASS] Anonmyz was terminated during the in-flight model request
+[PASS] Codex exited with an error after local proxy loss
+[PASS] Direct model fallback attempts observed: 0
+[INFO] Non-model Codex egress attempts blocked by trap: 0
+[PASS] Authentication canary appeared in output: false
+
+Interpretation:
+Anonmyz shutdown did not cause the protected Codex model request to fall back to api.openai.com or chatgpt.com. Codex failed closed after retrying its configured loopback model URL.

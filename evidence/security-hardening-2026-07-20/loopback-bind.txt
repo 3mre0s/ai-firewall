@@ -1,0 +1,8 @@
+Command:
+go test . -run TestListenLoopbackDynamicAndPortConflict -count=1 -v
+
+=== RUN   TestListenLoopbackDynamicAndPortConflict
+    main_test.go:150: verified loopback-only listener: 127.0.0.1:25593 (not 0.0.0.0)
+--- PASS: TestListenLoopbackDynamicAndPortConflict (0.00s)
+PASS
+ok      github.com/3mre0s/ai-firewall  0.366s

@@ -1,0 +1,14 @@
+Command:
+go test .\proxy -run TestAuthenticationMetadataNeverAppearsInLogsAuditOrErrors -count=1 -v
+
+=== RUN   TestAuthenticationMetadataNeverAppearsInLogsAuditOrErrors
+--- PASS: TestAuthenticationMetadataNeverAppearsInLogsAuditOrErrors (0.05s)
+PASS
+ok      github.com/3mre0s/ai-firewall/proxy    0.327s
+
+The test injects unique canaries as:
+- an Authorization OAuth bearer value;
+- a ChatGPT-Account-ID value;
+- a Cookie value.
+
+It verifies required Authorization and ChatGPT-Account-ID passthrough at the mock upstream, verifies Cookie is not forwarded, and scans captured logs, audit JSON, response bodies, and errors for every canary. The canary values themselves are intentionally not retained in this evidence file.

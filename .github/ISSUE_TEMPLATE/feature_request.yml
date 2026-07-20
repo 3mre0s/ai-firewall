@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose an improvement after checking existing issues and Discussions.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow or risk is not handled today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the user-facing behavior and alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Security and privacy impact
+      description: Note any new network, storage, credential, or trust-boundary implications.
+    validations:
+      required: true

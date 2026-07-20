@@ -1,0 +1,27 @@
+{
+  "evidence_type": "masked_session_audit_summary",
+  "source": "Anonmyz terminal session evidence emitted after Codex exited successfully",
+  "test_date": "2026-07-20T20:02:35+03:00",
+  "raw_values_retained": false,
+  "authentication_headers_retained": false,
+  "trace": {
+    "request_id": "req_cd60b21b91ef",
+    "method": "POST",
+    "path": "/responses",
+    "upstream_status": 200,
+    "detections_count": 1,
+    "restored_items": 3,
+    "response_leak_blocked": false,
+    "detections": [
+      {
+        "secret_type": "GitHub Personal Access Token v1",
+        "placeholder_id": "[[GH_PAT_D39A3558]]",
+        "original_prevented": true
+      }
+    ]
+  },
+  "verification": {
+    "result": "VERIFIED",
+    "summary": "1 sensitive occurrence prevented before upstream and safely restored"
+  }
+}

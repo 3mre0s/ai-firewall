@@ -25,12 +25,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/masker"
-	"github.com/localai/firewall/metrics"
-	"github.com/localai/firewall/mitm"
-	"github.com/localai/firewall/proxy"
-	"github.com/localai/firewall/vault"
+	"github.com/3mre0s/ai-firewall/audit"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/metrics"
+	"github.com/3mre0s/ai-firewall/mitm"
+	"github.com/3mre0s/ai-firewall/proxy"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // version is set at build time via -ldflags "-X main.version=<tag>".
@@ -54,6 +55,10 @@ func main() {
 		case "version":
 			runVersion()
 			os.Exit(0)
+		case "demo":
+			os.Exit(runDemo(os.Args[2:]))
+		case "codex":
+			os.Exit(runCodex(os.Args[2:]))
 		case "help", "-h", "--help":
 			runUsage()
 			os.Exit(0)
@@ -73,9 +78,10 @@ func main() {
 
 	// ── 3. Masker (Maskeleme Motoru) ──────────────────────────────────────────
 	m := masker.New(v, cfg)
+	traces := audit.NewStore(200)
 
 	// ── 4. Proxy Server + HTTP mux ────────────────────────────────────────────
-	firewallSrv := proxy.NewServer(cfg, m)
+	firewallSrv := proxy.NewServer(cfg, m, traces)
 
 	mux := http.NewServeMux()
 
@@ -90,6 +96,7 @@ func main() {
 	// HTML interface for monitoring firewall stats in real-time.
 	// (Gerçek zamanlı güvenlik duvarı istatistiklerini izlemek için HTML arayüz.)
 	mux.HandleFunc("/dashboard", localhostOnly(metrics.Global.HTMLHandler(v)))
+	mux.HandleFunc("/audit", localhostOnly(traces.Handler()))
 
 	// All other paths go through the firewall pipeline.
 	// (Diğer tüm yollar güvenlik duvarı boru hattından geçer.)
@@ -223,7 +230,7 @@ func localhostOnly(next http.HandlerFunc) http.HandlerFunc {
 		if host != "127.0.0.1" && host != "::1" {
 			w.Header().Set("Content-Type", "application/json")
 			http.Error(w,
-				`{"error":"forbidden","message":"metrics endpoint is localhost-only"}`,
+				`{"error":"forbidden","message":"local observability endpoints are localhost-only"}`,
 				http.StatusForbidden)
 			return
 		}
@@ -318,7 +325,7 @@ func runUninstallCA() int {
 // runVersion prints the build version injected via -ldflags.
 // (ldflags ile enjekte edilen derleme sürümünü yazdırır.)
 func runVersion() {
-	fmt.Printf("ai-firewall %s\n", version)
+	fmt.Printf("anonmyz %s (ai-firewall compatible)\n", version)
 }
 
 // runUsage prints a short command reference. Shown only for "help"/"-h"/"--help";
@@ -328,14 +335,20 @@ func runVersion() {
 //
 //	argümansız çalıştırma sunucuyu başlatmaya devam eder.)
 func runUsage() {
-	fmt.Print(`ai-firewall — Local AI Firewall
+	fmt.Print(`Anonmyz — local-first AI security and DLP gateway
 
 Usage:
-  ai-firewall                Start the proxy server (reads config from env vars).
-  ai-firewall install-ca     Install the MITM CA certificate into the system trust store.
-  ai-firewall uninstall-ca   Remove the MITM CA certificate from the system trust store.
-  ai-firewall version        Print the build version.
-  ai-firewall help           Show this help message.
+  anonmyz                    Start the proxy server (reads config from env vars).
+  anonmyz demo [--non-interactive]
+                             Run the deterministic, key-free security proof.
+  anonmyz codex [options] -- [codex args]
+                             Launch a protected Codex API-key session.
+  anonmyz install-ca         Install the MITM CA certificate into the system trust store.
+  anonmyz uninstall-ca       Remove the MITM CA certificate from the system trust store.
+  anonmyz version            Print the build version.
+  anonmyz help               Show this help message.
+
+The legacy ai-firewall binary name remains fully compatible.
 
 Key environment variables (server mode):
   FORWARD_API_KEY   Real API key forwarded to the upstream provider (required).
@@ -365,7 +378,7 @@ func printBanner(cfg *config.Config) {
 
 	banner := fmt.Sprintf(`
 ╔══════════════════════════════════════════════╗
-║         🔥  Local AI Firewall                ║
+║         🛡️  Anonmyz AI Gateway              ║
 ╠══════════════════════════════════════════════╣
 ║  Listen                    : :%d
 ║  Upstream                  : %s

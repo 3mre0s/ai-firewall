@@ -4,6 +4,8 @@ package proxy
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -11,10 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/masker"
-	"github.com/localai/firewall/metrics"
-	"github.com/localai/firewall/providers"
+	"github.com/3mre0s/ai-firewall/audit"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/metrics"
+	"github.com/3mre0s/ai-firewall/providers"
 )
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -33,6 +36,7 @@ type Server struct {
 	cfg      *config.Config
 	masker   *masker.Masker
 	provider providers.Provider
+	traces   *audit.Store
 
 	// client is a shared, reusable HTTP client with sensible timeouts.
 	// Creating one per request would exhaust file descriptors under load.
@@ -47,20 +51,30 @@ type Server struct {
 // (Sağlanan Config ve Masker'dan bir Server oluşturur.
 //
 //	Sağlayıcı kayıt üzerinden çözümlenir: ProviderHint, URL tabanlı otomatik algılamadan önce gelir.)
-func NewServer(cfg *config.Config, m *masker.Masker) *Server {
+func NewServer(cfg *config.Config, m *masker.Masker, traceStores ...*audit.Store) *Server {
 	var p providers.Provider
 	if cfg.ProviderHint != "" {
 		p = providers.DetectByHint(cfg.ProviderHint)
-		log.Printf("[firewall][info] provider override: %s", p.Name())
+		if cfg.LogLevel != "silent" {
+			log.Printf("[firewall][info] provider override: %s", p.Name())
+		}
 	} else {
 		p = providers.Detect(cfg.UpstreamURL)
-		log.Printf("[firewall][info] provider auto-detected: %s", p.Name())
+		if cfg.LogLevel != "silent" {
+			log.Printf("[firewall][info] provider auto-detected: %s", p.Name())
+		}
+	}
+
+	var traces *audit.Store
+	if len(traceStores) > 0 {
+		traces = traceStores[0]
 	}
 
 	return &Server{
 		cfg:      cfg,
 		masker:   m,
 		provider: p,
+		traces:   traces,
 		client: &http.Client{
 			// 5-minute timeout accommodates long AI-generated responses.
 			// (5 dakika zaman aşımı, uzun yapay zeka yanıtlarını karşılar.)
@@ -120,13 +134,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Only POST requests reach AI endpoints; reject everything else early.
 	// (Yalnızca POST istekleri AI uç noktalarına ulaşır; diğerlerini erken reddet.)
-	if r.Method != http.MethodPost {
+	modelCatalogRequest := r.Method == http.MethodGet && r.URL.Path == "/models"
+	if r.Method != http.MethodPost && !modelCatalogRequest {
 		metrics.Global.IncBlockedRequests()
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	metrics.Global.IncRequests()
+	trace := audit.Trace{
+		RequestID:            newRequestID(),
+		Timestamp:            time.Now().UTC(),
+		Method:               r.Method,
+		Path:                 r.URL.Path,
+		StreamingRestoration: "not_applicable",
+	}
+	var localLatency time.Duration
+	defer func() {
+		trace.ProxyLatencyMS = float64(localLatency.Microseconds()) / 1000
+		s.traces.Add(trace)
+	}()
+	w.Header().Set("X-Anonmyz-Request-Id", trace.RequestID)
 	s.logf("info", "→ %s %s [provider: %s]", r.Method, r.URL.Path, s.provider.Name())
 
 	requestMasker := s.masker.NewScope()
@@ -148,7 +176,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	localStart := time.Now()
 	maskResult := requestMasker.Mask(string(body))
+	localLatency += time.Since(localStart)
+	for _, detection := range maskResult.Detections {
+		trace.Detections = append(trace.Detections, audit.Detection{
+			SecretType:        detection.Name,
+			PlaceholderID:     detection.PlaceholderID,
+			OriginalPrevented: detection.OriginalPrevented,
+		})
+	}
 
 	// Kısmi maskeleme gerçekleştiyse metrikleri kaydet (vault-full durumunda bile).
 	// (Even if vault was full, count whatever was successfully masked.)
@@ -186,6 +223,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// r.URL.RequestURI() which might contain an absolute URI from a malicious client.
 	// (SSRF Koruması: Kötü niyetli bir istemciden gelen tam URL'leri engellemek için
 	// RequestURI yerine sadece Path ve RawQuery kullan.)
+	localStart = time.Now()
 	upstreamPath := r.URL.Path
 	if r.URL.RawQuery != "" {
 		upstreamPath += "?" + r.URL.RawQuery
@@ -194,7 +232,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	upstreamReq, err := http.NewRequestWithContext(
 		r.Context(),
-		http.MethodPost,
+		r.Method,
 		upstreamURL,
 		bytes.NewBufferString(maskResult.Text),
 	)
@@ -211,6 +249,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Delegate authentication to the provider — it knows which headers to set.
 	// (Kimlik doğrulamayı sağlayıcıya devret — hangi başlıkları ayarlayacağını bilir.)
 	s.provider.PrepareHeaders(upstreamReq.Header, s.cfg.ForwardAPIKey)
+	localLatency += time.Since(localStart)
 
 	resp, err := s.client.Do(upstreamReq)
 	if err != nil {
@@ -219,6 +258,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	trace.UpstreamStatus = resp.StatusCode
 	if encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
 		metrics.Global.IncUpstreamErrors()
 		http.Error(w, "compressed upstream response rejected", http.StatusBadGateway)
@@ -234,6 +274,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Delegate to the provider — each provider knows its own streaming convention.
 	// (Sağlayıcıya devret — her sağlayıcı kendi akış kuralını bilir.)
 	isStream := s.provider.IsStream(resp)
+	trace.Streaming = isStream
 	if isStream {
 		metrics.Global.IncStreamRequests()
 	}
@@ -246,28 +287,58 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ── Step 5: Unmask and deliver the response ───────────────────────────────
 	// (Maskeyi kaldır ve yanıtı teslim et)
 	if isStream {
-		s.handleStream(w, resp.Body, requestMasker)
+		restored, failed, processingLatency := s.handleStream(w, resp.Body, requestMasker)
+		localLatency += processingLatency
+		trace.RestoredItems = restored
+		trace.ResponseLeakBlocked = failed
+		switch {
+		case failed:
+			trace.StreamingRestoration = "failed"
+		case restored > 0:
+			trace.StreamingRestoration = "restored"
+		default:
+			trace.StreamingRestoration = "not_observed"
+		}
 	} else {
-		s.handleStandard(w, resp.Body, requestMasker)
+		restored, failed, processingLatency := s.handleStandard(w, resp.Body, requestMasker)
+		localLatency += processingLatency
+		trace.RestoredItems = restored
+		trace.ResponseLeakBlocked = failed
+		trace.StreamingRestoration = "not_streaming"
 	}
+}
+
+func newRequestID() string {
+	var buf [6]byte
+	if _, err := rand.Read(buf[:]); err == nil {
+		return "req_" + hex.EncodeToString(buf[:])
+	}
+	return fmt.Sprintf("req_%x", time.Now().UnixNano())
 }
 
 // handleStandard reads the entire response body, unmasks it, and writes once.
 // (Tüm yanıt gövdesini okur, maskesini kaldırır ve bir kez yazar.)
-func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader, requestMasker *masker.Masker) {
+func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader, requestMasker *masker.Masker) (int, bool, time.Duration) {
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		s.logf("error", "reading standard response (standart yanıt okunuyor): %v", err)
-		return
+		return 0, true, 0
 	}
-	unmasked := requestMasker.Unmask(string(raw))
+	started := time.Now()
+	if requestMasker.ContainsOriginal(string(raw)) || requestMasker.HasCredentialSecrets(string(raw)) {
+		processingLatency := time.Since(started)
+		s.logf("error", "secret detected in standard response - suppressing body")
+		return 0, true, processingLatency
+	}
+	unmasked, replaced := requestMasker.UnmaskWithCount(string(raw))
+	processingLatency := time.Since(started)
 	// Count unmasked items (replaced labels) for metrics.
 	// (Metrikler için maskeleri kaldırılan öğeleri say.)
-	replaced := strings.Count(string(raw), "[[") - strings.Count(unmasked, "[[")
 	if replaced > 0 {
 		metrics.Global.IncUnmaskedItems(int64(replaced))
 	}
 	w.Write([]byte(unmasked))
+	return replaced, false, processingLatency
 }
 
 // handleStream processes the SSE body chunk-by-chunk via streamProcessor.
@@ -290,26 +361,28 @@ func (s *Server) handleStandard(w http.ResponseWriter, body io.Reader, requestMa
 //	(sorunlu chunk'ın kendisi) bastırılır: proxy onu düşürür ve bağlantıyı kapatır,
 //	böylece istemci beklenmedik bir EOF alır. Sır barındıran chunk'tan ÖNCEKİ
 //	chunk'lar etkilenmez.)
-func (s *Server) handleStream(w http.ResponseWriter, body io.Reader, requestMasker *masker.Masker) {
+func (s *Server) handleStream(w http.ResponseWriter, body io.Reader, requestMasker *masker.Masker) (int, bool, time.Duration) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		s.logf("warn", "ResponseWriter does not support streaming (akışı desteklemiyor), buffering")
-		s.handleStandard(w, body, requestMasker)
-		return
+		return s.handleStandard(w, body, requestMasker)
 	}
 
 	processor := NewStreamProcessor(requestMasker)
 	buf := make([]byte, 4096)
+	var processingLatency time.Duration
 
 	for {
 		n, err := body.Read(buf)
 		if n > 0 {
+			started := time.Now()
 			out := processor.Process(buf[:n])
+			processingLatency += time.Since(started)
 			// Fail-fast: secret detected in output — close connection immediately.
 			// (Hızlı başarısızlık: çıktıda sır tespit edildi — bağlantıyı derhal kapat.)
 			if processor.LeakDetected() {
 				s.logf("error", "🚨 secret detected in stream — terminating connection (akışta sır tespit edildi — bağlantı sonlandırılıyor)")
-				return
+				return processor.RestoredCount(), true, processingLatency
 			}
 			if out != "" {
 				w.Write([]byte(out))
@@ -326,15 +399,22 @@ func (s *Server) handleStream(w http.ResponseWriter, body io.Reader, requestMask
 
 	// Flush any remaining buffered content.
 	// (Kalan arabelleğe alınmış içeriği temizle.)
+	started := time.Now()
 	tail := processor.Flush()
+	processingLatency += time.Since(started)
 	if processor.LeakDetected() {
 		s.logf("error", "🚨 secret in stream tail — terminating (akış kuyruğunda sır — sonlandırılıyor)")
-		return
+		return processor.RestoredCount(), true, processingLatency
 	}
 	if tail != "" {
 		w.Write([]byte(tail))
 		flusher.Flush()
 	}
+	restored := processor.RestoredCount()
+	if restored > 0 {
+		metrics.Global.IncUnmaskedItems(int64(restored))
+	}
+	return restored, false, processingLatency
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -357,6 +437,24 @@ var allowedRequestHeaders = []string{
 	"Anthropic-Version",
 	"Anthropic-Beta",
 	"Openai-Organization",
+	"Openai-Project",
+	"Openai-Beta",
+	"ChatGPT-Account-ID",
+	"Originator",
+	"Version",
+	"Session-ID",
+	"Thread-ID",
+	"X-Client-Request-ID",
+	"X-Codex-Installation-ID",
+	"X-Codex-Turn-State",
+	"X-Codex-Turn-Metadata",
+	"X-Codex-Parent-Thread-ID",
+	"X-Codex-Window-ID",
+	"X-OpenAI-Memgen-Request",
+	"X-OpenAI-Subagent",
+	"X-OpenAI-Internal-Codex-Responses-Lite",
+	"X-ResponsesAPI-Include-Timing-Metrics",
+	"X-OAI-Attestation",
 	"Authorization", // passthrough mode (FORWARD_API_KEY=none): client's Bearer token flows through
 	"X-Api-Key",
 	"X-Goog-Api-Key",
@@ -371,6 +469,7 @@ var allowedResponseHeaders = []string{
 	"Anthropic-Ratelimit-Requests-Remaining",
 	"X-Ratelimit-Limit-Requests",
 	"X-Ratelimit-Remaining-Requests",
+	"X-Codex-Turn-State",
 }
 
 func (s *Server) copyRequestHeaders(src, dst http.Header) {
@@ -436,6 +535,7 @@ type StreamProcessor struct {
 	masker       *masker.Masker
 	buf          strings.Builder // incomplete tail from previous chunk (önceki parçadan tamamlanmamış kuyruk)
 	leakDetected bool            // set when a secret is found in stream output (akış çıktısında sır bulunduğunda set edilir)
+	restored     int
 }
 
 // LeakDetected reports whether a secret pattern was found in the stream output.
@@ -445,6 +545,11 @@ type StreamProcessor struct {
 //	True olduğunda çağıranın akışı derhal sonlandırması gerekir.)
 func (sp *StreamProcessor) LeakDetected() bool {
 	return sp.leakDetected
+}
+
+// RestoredCount reports how many placeholders were restored so far.
+func (sp *StreamProcessor) RestoredCount() int {
+	return sp.restored
 }
 
 // NewStreamProcessor creates a processor for one streaming response lifetime.
@@ -487,12 +592,14 @@ func (sp *StreamProcessor) Process(chunk []byte) string {
 		// (Maskeleme kaldırmadan ÖNCE ham içeriği kontrol et.
 		//  Kasa etiketleri [[PREFIX_HEX]] asla sır desenlerine uymaz; dolayısıyla
 		//  buradaki her eşleşme maskeleme hattımızdan hiç geçmemiş gerçek bir sızıntıdır.)
-		if sp.masker.HasSecrets(content) {
+		if sp.masker.ContainsOriginal(content) || sp.masker.HasCredentialSecrets(content) {
 			log.Printf("[stream][error] 🚨 secret detected in stream output — terminating")
 			sp.leakDetected = true
 			return ""
 		}
-		return sp.masker.Unmask(content)
+		unmasked, restored := sp.masker.UnmaskWithCount(content)
+		sp.restored += restored
+		return unmasked
 	}
 
 	current := sp.buf.String()
@@ -516,7 +623,7 @@ func (sp *StreamProcessor) Process(chunk []byte) string {
 	// (Güvenli pencereyi maskeleme kaldırmadan ÖNCE kontrol et.
 	//  [[EMAIL_A4F0C8B2]] gibi kasa etiketleri @, sk-, ghp_ içermez,
 	//  dolayısıyla eşleşmez — yalnızca ham sızdırılan sırlar burada yakalanır.)
-	if sp.masker.HasSecrets(safe) {
+	if sp.masker.ContainsOriginal(safe) || sp.masker.HasCredentialSecrets(safe) {
 		log.Printf("[stream][error] 🚨 secret detected in stream output — terminating")
 		sp.leakDetected = true
 		return ""
@@ -524,7 +631,9 @@ func (sp *StreamProcessor) Process(chunk []byte) string {
 
 	// Unmask any complete labels in the safe window.
 	// (Güvenli penceredeki tüm tam etiketlerin maskesini kaldır.)
-	return sp.masker.Unmask(safe)
+	unmasked, restored := sp.masker.UnmaskWithCount(safe)
+	sp.restored += restored
+	return unmasked
 }
 
 // Flush drains the buffer unconditionally, unmasking whatever remains.
@@ -540,12 +649,14 @@ func (sp *StreamProcessor) Flush() string {
 	}
 	// Fail-fast: check BEFORE unmasking — same rationale as Process().
 	// (Maskeleme kaldırmadan ÖNCE kontrol et — Process() ile aynı gerekçe.)
-	if sp.masker.HasSecrets(remaining) {
+	if sp.masker.ContainsOriginal(remaining) || sp.masker.HasCredentialSecrets(remaining) {
 		log.Printf("[stream][error] 🚨 secret detected in stream tail — terminating")
 		sp.leakDetected = true
 		return ""
 	}
-	return sp.masker.Unmask(remaining)
+	unmasked, restored := sp.masker.UnmaskWithCount(remaining)
+	sp.restored += restored
+	return unmasked
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -568,6 +679,11 @@ func (sp *StreamProcessor) Flush() string {
 func SafeCutpoint(text string) int {
 	lastOpen := strings.LastIndex(text, "[[")
 	if lastOpen == -1 {
+		// A network chunk can split the opening delimiter between its two
+		// brackets. Retain a trailing single '[' until the next chunk arrives.
+		if strings.HasSuffix(text, "[") {
+			return len(text) - 1
+		}
 		// No label opening anywhere — the entire text is safe to flush.
 		// (Hiçbir yerde etiket açılışı yok — metnin tamamını temizlemek güvenli.)
 		return len(text)
@@ -577,6 +693,9 @@ func SafeCutpoint(text string) int {
 	// (Son açılış köşeli parantezi kapatılmış mı?)
 	afterOpen := text[lastOpen:]
 	if strings.Contains(afterOpen, "]]") {
+		if strings.HasSuffix(text, "[") {
+			return len(text) - 1
+		}
 		// Label is complete; the whole text is safe.
 		// (Etiket tamamlandı; metnin tamamı güvenli.)
 		return len(text)

@@ -12,10 +12,11 @@ package vault
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
-	"github.com/localai/firewall/metrics"
+	"github.com/3mre0s/ai-firewall/metrics"
 )
 
 // Entry is a single record inside the Vault.
@@ -95,6 +96,19 @@ func (v *Vault) Retrieve(label string) (string, bool) {
 	// (sayaç için yazma kilidi gerekmez)
 	atomic.AddInt64(&entry.hitCount, 1)
 	return entry.Original, true
+}
+
+// ContainsOriginal reports whether text contains any original value retained
+// in this request-scoped vault. It does not expose or hash those values.
+func (v *Vault) ContainsOriginal(text string) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, entry := range v.entries {
+		if entry.Original != "" && strings.Contains(text, entry.Original) {
+			return true
+		}
+	}
+	return false
 }
 
 // Reset wipes all entries, freeing memory.

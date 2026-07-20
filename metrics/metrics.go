@@ -204,7 +204,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Local AI Firewall — Dashboard</title>
+    <title>Anonmyz — Local Privacy Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -324,6 +324,13 @@ const dashboardHTML = `<!DOCTYPE html>
         .card-stat { padding: 16px; text-align: center; }
         .card-stat .card-value { font-size: 1.8em; }
         .card-stat .card-title { font-size: 0.7em; margin-bottom: 0; }
+		.trace-wrap { overflow-x: auto; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; }
+		.trace-table { width: 100%; border-collapse: collapse; font-size: 0.78em; }
+		.trace-table th, .trace-table td { padding: 11px 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.05); white-space: nowrap; }
+		.trace-table th { color: rgba(255,255,255,0.42); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+		.trace-table td { color: rgba(255,255,255,0.76); }
+		.trace-table code { color: #93c5fd; }
+		.trace-empty { padding: 20px; color: rgba(255,255,255,0.4); }
         footer {
             display: flex; align-items: center; justify-content: space-between;
             margin-top: 32px; padding: 12px 16px;
@@ -360,7 +367,7 @@ const dashboardHTML = `<!DOCTYPE html>
             <div class="header-left">
                 <div class="header-icon">🛡</div>
                 <div class="header-text">
-                    <h1>Local AI Firewall</h1>
+                    <h1>Anonmyz</h1>
                     <span>Real-time Metrics Dashboard</span>
                 </div>
             </div>
@@ -399,9 +406,19 @@ const dashboardHTML = `<!DOCTYPE html>
             </div>
         </div>
 
+		<div class="section">
+			<div class="section-title">Local Privacy Trace — newest 8 detections, raw values never retained</div>
+			<div class="trace-wrap">
+				<table class="trace-table">
+					<thead><tr><th>Time</th><th>Request</th><th>Detected</th><th>Placeholder</th><th>Prevented</th><th>Proxy latency</th><th>Stream restore</th></tr></thead>
+					<tbody id="traceRows"><tr><td colspan="7" class="trace-empty">No protected requests yet.</td></tr></tbody>
+				</table>
+			</div>
+		</div>
+
         <footer>
             <div class="footer-left"><span class="pulse-dot"></span><span id="lastUpdate">Loading dashboard...</span></div>
-            <span>Local AI Firewall v1.0.0</span>
+            <span>Anonmyz · local-first DLP</span>
         </footer>
     </div>
 
@@ -447,8 +464,40 @@ const dashboardHTML = `<!DOCTYPE html>
                 document.getElementById('lastUpdate').textContent = 'Connection lost — retrying...';
             });
         }
+		function updateAudit() {
+			fetch('/audit').then(function(r){return r.json()}).then(function(d){
+				var rows = document.getElementById('traceRows');
+				rows.textContent = '';
+				var count = 0;
+				(d.traces || []).some(function(trace){
+					return (trace.detections || []).some(function(det){
+						if (count++ >= 8) return true;
+						var values = [
+							new Date(trace.timestamp).toLocaleTimeString(), trace.request_id,
+							det.secret_type, det.placeholder_id,
+							det.original_prevented ? 'Yes' : 'No',
+							Number(trace.proxy_latency_ms || 0).toFixed(2) + ' ms',
+							trace.streaming_restoration
+						];
+						var tr = document.createElement('tr');
+						values.forEach(function(value, index){
+							var td = document.createElement('td');
+							if (index === 3) { var code = document.createElement('code'); code.textContent = value; td.appendChild(code); }
+							else { td.textContent = value; }
+							if (index === 4) td.className = det.original_prevented ? 'text-good' : 'text-error';
+							tr.appendChild(td);
+						});
+						rows.appendChild(tr);
+						return false;
+					});
+				});
+				if (count === 0) { var tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 7; td.className = 'trace-empty'; td.textContent = 'No protected requests yet.'; tr.appendChild(td); rows.appendChild(tr); }
+			}).catch(function(){});
+		}
         updateMetrics();
+		updateAudit();
         setInterval(updateMetrics, 3000);
+		setInterval(updateAudit, 3000);
     </script>
 </body>
 </html>

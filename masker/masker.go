@@ -19,10 +19,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/localai/firewall/config"
-	"github.com/localai/firewall/metrics"
-	"github.com/localai/firewall/patterns"
-	"github.com/localai/firewall/vault"
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/metrics"
+	"github.com/3mre0s/ai-firewall/patterns"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // Masker wires together the pattern registry, the vault, and the config.
@@ -87,7 +87,18 @@ type MaskResult struct {
 	Text           string                       // sanitised text ready to send upstream (hedefe gönderilmeye hazır temizlenmiş metin)
 	MaskedCount    int                          // total number of values that were replaced (değiştirilen toplam değer sayısı)
 	ByType         map[patterns.PatternType]int // breakdown by category (kategoriye göre dağılım)
+	Detections     []Detection                  // privacy-safe metadata; never contains the matched value
 	VaultEvictions int
+}
+
+// Detection is safe to expose in local audit records. The original value is
+// used only while Mask is running and is cleared before the result returns.
+type Detection struct {
+	Name              string
+	Type              patterns.PatternType
+	PlaceholderID     string
+	OriginalPrevented bool
+	original          string
 }
 
 // ── Mask (Maskeleme) ──────────────────────────────────────────────────────────
@@ -135,6 +146,12 @@ func (m *Masker) Mask(text string) MaskResult {
 		}
 	}
 
+	for i := range result.Detections {
+		result.Detections[i].OriginalPrevented =
+			!strings.Contains(result.Text, result.Detections[i].original)
+		result.Detections[i].original = ""
+	}
+
 	return result
 }
 
@@ -148,6 +165,9 @@ func (m *Masker) maskFull(text string, p patterns.SensitivePattern, r *MaskResul
 		if existingLabel, ok := seen[match]; ok {
 			r.MaskedCount++
 			r.ByType[p.Type]++
+			r.Detections = append(r.Detections, Detection{
+				Name: p.Name, Type: p.Type, PlaceholderID: existingLabel, original: match,
+			})
 			return existingLabel
 		}
 
@@ -161,6 +181,9 @@ func (m *Masker) maskFull(text string, p patterns.SensitivePattern, r *MaskResul
 		seen[match] = label
 		r.MaskedCount++
 		r.ByType[p.Type]++
+		r.Detections = append(r.Detections, Detection{
+			Name: p.Name, Type: p.Type, PlaceholderID: label, original: match,
+		})
 		return label
 	})
 }
@@ -179,6 +202,12 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 		}
 
 		value := subs[p.GroupIndex]
+		// A more specific pattern may already have replaced this value. Never
+		// wrap one Anonmyz placeholder inside another: a single response pass
+		// must be sufficient to restore the original value.
+		if m.labelPattern.MatchString(value) {
+			return match
+		}
 
 		if p.Validate != nil && !p.Validate(value) {
 			return match // failed checksum / semantic validation — leave as-is
@@ -186,6 +215,9 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 		if existingLabel, ok := seen[value]; ok {
 			r.MaskedCount++
 			r.ByType[p.Type]++
+			r.Detections = append(r.Detections, Detection{
+				Name: p.Name, Type: p.Type, PlaceholderID: existingLabel, original: value,
+			})
 			return strings.Replace(match, value, existingLabel, 1)
 		}
 
@@ -200,6 +232,9 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 		seen[value] = label
 		r.MaskedCount++
 		r.ByType[p.Type]++
+		r.Detections = append(r.Detections, Detection{
+			Name: p.Name, Type: p.Type, PlaceholderID: label, original: value,
+		})
 
 		// Replace only the first occurrence of value inside match.
 		// Since the regex already guarantees value is inside match, this is safe.
@@ -251,6 +286,45 @@ func (m *Masker) HasSecrets(text string) bool {
 	return false
 }
 
+// ContainsOriginal reports whether text contains a raw sensitive value that
+// this request scope previously replaced. Unlike HasSecrets, it does not flag
+// unrelated secret-shaped model output or workspace paths.
+func (m *Masker) ContainsOriginal(text string) bool {
+	return m.vault.ContainsOriginal(text)
+}
+
+// HasCredentialSecrets reports credential-like output independently of the
+// request vault. Paths and PII are excluded here because model response
+// envelopes can legitimately contain workspace metadata; exact request values
+// in those categories are still caught by ContainsOriginal.
+func (m *Masker) HasCredentialSecrets(text string) bool {
+	for _, p := range patterns.Registry {
+		if p.Type == patterns.TypePath || p.Type == patterns.TypePII {
+			continue
+		}
+		if p.Validate == nil {
+			if p.Regex.MatchString(text) {
+				return true
+			}
+			continue
+		}
+		if p.GroupIndex > 0 {
+			for _, subs := range p.Regex.FindAllStringSubmatch(text, -1) {
+				if len(subs) > p.GroupIndex && p.Validate(subs[p.GroupIndex]) {
+					return true
+				}
+			}
+		} else {
+			for _, match := range p.Regex.FindAllString(text, -1) {
+				if p.Validate(match) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // ── Unmask (Maskeyi Kaldırma) ─────────────────────────────────────────────────
 
 // Unmask scans text for any vault label and replaces each with its stored
@@ -262,12 +336,23 @@ func (m *Masker) HasSecrets(text string) bool {
 //	orijinal değeriyle değiştirir. Kasada bulunmayan etiketler değiştirilmeden
 //	bırakılır — farklı bir oturuma ait veya sahte metin olabilirler.)
 func (m *Masker) Unmask(text string) string {
-	return m.labelPattern.ReplaceAllStringFunc(text, func(label string) string {
+	unmasked, _ := m.UnmaskWithCount(text)
+	return unmasked
+}
+
+// UnmaskWithCount restores known placeholders and reports how many
+// replacements were made. It is used by the audit trail without exposing any
+// secret value.
+func (m *Masker) UnmaskWithCount(text string) (string, int) {
+	restored := 0
+	unmasked := m.labelPattern.ReplaceAllStringFunc(text, func(label string) string {
 		if original, ok := m.vault.Retrieve(label); ok {
+			restored++
 			return original
 		}
 		// Unknown label: return it unchanged to avoid corrupting the response.
 		// (Bilinmeyen etiket: yanıtı bozmamak için değiştirmeden döndür.)
 		return label
 	})
+	return unmasked, restored
 }

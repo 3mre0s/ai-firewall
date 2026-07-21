@@ -8,6 +8,8 @@ The centerpiece is `anonmyz demo`, a deterministic proof that needs no API key a
 
 The protected model route is fail-closed. An automated probe sends the installed Codex CLI through a real loopback Anonmyz proxy, terminates that proxy during the in-flight request, and traps direct egress. Codex exits with an error and makes zero direct model fallback attempts. The listener is explicitly bound to `127.0.0.1`, never `0.0.0.0`.
 
+The protected child also receives a temporary `features.apps=false` override, so Codex Apps/MCP traffic does not start outside the model-provider route. The current-CLI probe accepts only a literal loopback model URL and fails if any request reaches its external-egress trap; it does not allowlist `chatgpt.com`, OpenAI, or any other hostname.
+
 A bounded, memory-only local audit trail records only request ID, timestamp, detected type, safe placeholder ID, prevention result, latency, upstream status, and restoration outcome. It never retains request bodies, raw values, secret hashes, OAuth bearer values, ChatGPT account identifiers, or cookies.
 
 Anonmyz is a single cross-platform Go binary under the Apache-2.0 license. There is no Anonmyz cloud service, account, telemetry pipeline, database, or runtime dependency.

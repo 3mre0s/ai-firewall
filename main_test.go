@@ -107,6 +107,9 @@ func TestCodexOptionsAndTemporaryOverrides(t *testing.T) {
 		}
 	}
 
+	if !strings.Contains(joined, "features.apps=false") {
+		t.Fatalf("Codex args do not disable Apps: %s", joined)
+	}
 	chatGPTArgs := strings.Join(buildCodexArgs("http://127.0.0.1:9191", codexAuthChatGPT, nil), " ")
 	for _, want := range []string{`model_provider="anonmyz"`, `base_url="http://127.0.0.1:9191"`, `requires_openai_auth=true`, `supports_websockets=false`} {
 		if !strings.Contains(chatGPTArgs, want) {
@@ -121,6 +124,25 @@ func TestCodexOptionsAndTemporaryOverrides(t *testing.T) {
 	}
 	if got := defaultCodexUpstream(codexAuthStoredAPI); got != openAICodexUpstream {
 		t.Fatalf("API-key upstream = %q, want %q", got, openAICodexUpstream)
+	}
+}
+
+func TestCodexSafeSessionCannotReenableApps(t *testing.T) {
+	for _, args := range [][]string{
+		{"--enable", "apps"},
+		{"--enable=apps"},
+		{"-c", "features.apps=true"},
+		{"-cfeatures.apps=true"},
+		{"-c=features.apps=true"},
+		{"--config", "features.apps=false"},
+		{"--config=features.apps=true"},
+	} {
+		if err := validateProtectedCodexArgs(args); err == nil {
+			t.Fatalf("validateProtectedCodexArgs(%q) unexpectedly allowed an Apps override", args)
+		}
+	}
+	if err := validateProtectedCodexArgs([]string{"exec", "--ephemeral", "hello"}); err != nil {
+		t.Fatalf("ordinary Codex args rejected: %v", err)
 	}
 }
 

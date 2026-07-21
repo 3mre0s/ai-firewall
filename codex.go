@@ -56,6 +56,10 @@ func runCodex(args []string) int {
 		printCodexUsage()
 		return 0
 	}
+	if err := validateProtectedCodexArgs(opts.forwarded); err != nil {
+		fmt.Fprintf(os.Stderr, "codex: %v\n", err)
+		return 2
+	}
 
 	codexPath, err := exec.LookPath("codex")
 	if err != nil {
@@ -83,6 +87,7 @@ func runCodex(args []string) int {
 		fmt.Printf("  Local model URL:  %s\n", plannedURL)
 		fmt.Printf("  Upstream:         %s\n", upstream)
 		fmt.Println("  Global config:    unchanged (temporary -c overrides only)")
+		fmt.Println("  Codex Apps:       disabled for this protected child process")
 		fmt.Println("  Request bodies:   masked locally; Codex authentication headers pass through")
 		if authMode == codexAuthMissing {
 			fmt.Println("  BLOCKED: complete `codex login` (ChatGPT is supported) or set OPENAI_API_KEY")
@@ -320,7 +325,34 @@ func buildCodexArgs(baseURL string, authMode codexAuthMode, forwarded []string) 
 	// Anonmyz scans plaintext HTTP request bodies. Force this session off the
 	// compressed-request transport so model traffic cannot bypass inspection.
 	args = append(args, "-c", `features.enable_request_compression=false`)
+	// Apps are disabled for this child process because their separate MCP
+	// transport does not use the configured model-provider base URL.
+	args = append(args, "-c", `features.apps=false`)
 	return append(args, forwarded...)
+}
+
+func validateProtectedCodexArgs(args []string) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--enable" && i+1 < len(args) && strings.EqualFold(args[i+1], "apps"):
+			return errors.New("cannot enable Codex Apps in a protected Safe Session")
+		case strings.EqualFold(arg, "--enable=apps"):
+			return errors.New("cannot enable Codex Apps in a protected Safe Session")
+		case strings.HasPrefix(arg, "-c") && len(arg) > 2 && isAppsConfig(strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")):
+			return errors.New("cannot override features.apps in a protected Safe Session")
+		case (arg == "-c" || arg == "--config") && i+1 < len(args) && isAppsConfig(args[i+1]):
+			return errors.New("cannot override features.apps in a protected Safe Session")
+		case strings.HasPrefix(arg, "--config=") && isAppsConfig(strings.TrimPrefix(arg, "--config=")):
+			return errors.New("cannot override features.apps in a protected Safe Session")
+		}
+	}
+	return nil
+}
+
+func isAppsConfig(value string) bool {
+	key, _, ok := strings.Cut(value, "=")
+	return ok && strings.EqualFold(strings.TrimSpace(key), "features.apps")
 }
 
 func shutdownHTTPServer(server *http.Server) {

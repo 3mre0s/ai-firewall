@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -26,6 +27,8 @@ import (
 )
 
 const syntheticKey = "anonmyz-local-fail-closed-probe-not-a-real-key"
+
+const codexAppsOverride = `features.apps=false`
 
 type lockedBuffer struct {
 	mu sync.Mutex
@@ -107,6 +110,10 @@ func main() {
 		fatalf("cannot start loopback Anonmyz proxy: %v", err)
 	}
 	localURL := "http://" + listener.Addr().String()
+	if err := validateLoopbackModelURL(localURL); err != nil {
+		_ = listener.Close()
+		fatalf("unsafe model route: %v", err)
+	}
 	anonmyzServer := &http.Server{Handler: proxy.NewServer(cfg, masker.New(vault.New(10), cfg))}
 	go func() {
 		_ = anonmyzServer.Serve(listener)
@@ -121,6 +128,7 @@ func main() {
 		"-c", `model_providers.anonmyz_probe.env_key="ANONMYZ_FAIL_CLOSED_PROBE_KEY"`,
 		"-c", `features.enable_request_compression=false`,
 		"-c", `features.plugins=false`,
+		"-c", codexAppsOverride,
 		"-c", `analytics.enabled=false`,
 		"-c", `feedback.enabled=false`,
 		"exec", "--ignore-user-config", "--ephemeral",
@@ -145,11 +153,11 @@ func main() {
 		_ = anonmyzServer.Close()
 	case err := <-done:
 		_ = anonmyzServer.Close()
-		fatalf("Codex exited before the in-flight request could be interrupted: %v\n%s", err, output.String())
+		fatalf("Codex exited before the in-flight request could be interrupted: %v", err)
 	case <-time.After(25 * time.Second):
 		_ = cmd.Process.Kill()
 		_ = anonmyzServer.Close()
-		fatalf("timed out waiting for Codex to reach the local Anonmyz proxy\n%s", output.String())
+		fatalf("timed out waiting for Codex to reach the local Anonmyz proxy")
 	}
 
 	var exitErr error
@@ -158,43 +166,44 @@ func main() {
 	case <-time.After(110 * time.Second):
 		_ = cmd.Process.Kill()
 		exitErr = <-done
-		fatalf("Codex did not stop after its local proxy disappeared: %v\n%s", exitErr, output.String())
+		fatalf("Codex did not stop after its local proxy disappeared: %v", exitErr)
 	}
 	if exitErr == nil {
-		fatalf("Codex unexpectedly succeeded after its local proxy disappeared\n%s", output.String())
+		fatalf("Codex unexpectedly succeeded after its local proxy disappeared")
 	}
 	allEgress := directEgress.list()
-	var modelEgress []string
-	for _, attempt := range allEgress {
-		if isModelEndpoint(attempt) {
-			modelEgress = append(modelEgress, attempt)
-		}
-	}
-	if len(modelEgress) != 0 {
-		fatalf("Codex attempted direct model egress after proxy shutdown: %v\n%s", modelEgress, output.String())
+	if err := validateNoUnexpectedEgress(allEgress); err != nil {
+		fatalf("%v", err)
 	}
 	if strings.Contains(output.String(), syntheticKey) {
 		fatalf("synthetic authentication value appeared in Codex output")
 	}
 
 	fmt.Println("[PASS] Codex request first traversed the real loopback Anonmyz proxy")
+	fmt.Println("[PASS] Codex Apps disabled with temporary features.apps=false override")
 	fmt.Println("[PASS] Anonmyz was terminated during the in-flight model request")
 	fmt.Println("[PASS] Codex exited with an error after local proxy loss")
-	fmt.Println("[PASS] Direct model fallback attempts observed: 0")
-	fmt.Printf("[INFO] Non-model Codex egress attempts blocked by trap: %d\n", len(allEgress))
+	fmt.Println("[PASS] Unexpected non-loopback connection attempts observed: 0")
 	fmt.Println("[PASS] Authentication canary appeared in output: false")
 }
 
-func isModelEndpoint(attempt string) bool {
-	fields := strings.Fields(attempt)
-	if len(fields) < 2 {
-		return false
+func validateLoopbackModelURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() == "" {
+		return fmt.Errorf("invalid local model URL")
 	}
-	host := fields[1]
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		host = parsedHost
+	ip := net.ParseIP(parsed.Hostname())
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("model URL destination is not a literal loopback address")
 	}
-	return strings.EqualFold(host, "api.openai.com") || strings.EqualFold(host, "chatgpt.com")
+	return nil
+}
+
+func validateNoUnexpectedEgress(attempts []string) error {
+	if len(attempts) == 0 {
+		return nil
+	}
+	return fmt.Errorf("unexpected outbound connection attempts reached the egress trap: count=%d", len(attempts))
 }
 
 func probeEnvironment(base []string, trapURL string) []string {

@@ -32,6 +32,8 @@ go run ./scripts/verify-codex-fail-closed
 
 The probe uses a synthetic local-only authentication canary. It terminates the real loopback Anonmyz proxy during an in-flight Codex request and requires all of the following: Codex exits with an error, direct model fallback attempts equal zero, and the canary is absent from output.
 
+The protected child receives a temporary `features.apps=false` override. Verification fails if Apps/MCP or any other unexpected request reaches the external-egress trap; no OpenAI or `chatgpt.com` hostname is allowlisted.
+
 ## Optional live Codex proof
 
 Use an existing ChatGPT login and only an unmistakably fake secret-shaped value:

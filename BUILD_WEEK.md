@@ -66,6 +66,8 @@ Safe Session was designed against the installed `codex-cli 0.137.0` help, the cu
 
 Codex receives a temporary custom Responses provider whose base URL is the local proxy. An exported `OPENAI_API_KEY` is referenced through `env_key`; a stored Codex API-key or ChatGPT login is preserved through `requires_openai_auth`. Codex continues to manage its own authentication, while Anonmyz passes the required authorization and ChatGPT account headers through and masks only request bodies. The protected provider has WebSocket support disabled, and request compression is disabled for the child session, so traffic stays on the inspected HTTP path.
 
+Current-CLI revalidation used `codex-cli 0.145.0-alpha.27`. Safe Session now applies a temporary `features.apps=false` override to the protected child, rejects forwarded attempts to re-enable Apps, and leaves the user's global configuration and `CODEX_HOME` unchanged. The fail-closed probe requires a literal loopback model URL and fails on any request reaching its external-egress trap; no OpenAI or `chatgpt.com` hostname is allowlisted.
+
 ## Privacy and threat model
 
 Anonmyz protects against accidental disclosure of values matching its configured patterns in request bodies that actually traverse the proxy. It is not a sandbox, malware defense, semantic classifier, or guarantee that every possible secret format will be recognized.

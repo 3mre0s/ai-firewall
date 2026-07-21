@@ -18,6 +18,7 @@
 - Request-scoped response leak detection that avoids unrelated path/PII false positives while remaining fail-closed for credentials.
 - Live ChatGPT-subscription verification using only a fake GitHub PAT-shaped payload.
 - Automated proxy-loss proof showing Codex error termination and zero direct model fallback attempts.
+- Current-CLI Safe Session hardening that disables Apps only for the protected child and makes any trapped non-loopback egress a verification failure without hostname allowlists.
 - Loopback-only and authentication-metadata non-retention regression tests.
 - Cross-platform Anonmyz builds, checksums, judge guide, Devpost copy, video script, and sanitized evidence package.
 

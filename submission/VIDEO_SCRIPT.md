@@ -39,6 +39,8 @@ go run ./scripts/verify-codex-fail-closed
 
 Point to Codex exiting with an error and zero direct model fallback attempts. Show the loopback test line proving `127.0.0.1:<dynamic>` and not `0.0.0.0`.
 
+Also point to Codex Apps being disabled only for the protected child and to zero unexpected non-loopback connection attempts. Explain that the verifier does not allowlist OpenAI, `chatgpt.com`, or any other external hostname.
+
 ## 2:10–2:30 — Explainability
 
 Show the dashboard/audit evidence: secret type, placeholder, request ID, prevention, latency, upstream status, and restoration. Emphasize that raw values, bodies, hashes, OAuth bearer tokens, ChatGPT account IDs, and cookies are absent.

@@ -1,0 +1,12 @@
+Commands:
+codex --version
+go run .\scripts\verify-codex-fail-closed
+
+Result: exit code 0
+codex-cli 0.145.0-alpha.27
+[PASS] Codex request first traversed the real loopback Anonmyz proxy
+[PASS] Codex Apps disabled with temporary features.apps=false override
+[PASS] Anonmyz was terminated during the in-flight model request
+[PASS] Codex exited with an error after local proxy loss
+[PASS] Unexpected non-loopback connection attempts observed: 0
+[PASS] Authentication canary appeared in output: false

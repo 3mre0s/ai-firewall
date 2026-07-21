@@ -80,6 +80,8 @@ For ChatGPT login, Codex keeps ownership of its OAuth token and account selector
 
 **Validation status:** live Codex traffic authenticated by an existing ChatGPT subscription completed successfully with a clearly fake GitHub PAT-shaped test value. The audit evidence showed `status=200`, `detections=1`, `prevented=true`, `restored=3`, and `response_blocked=false`; no real secret was used or retained. A separate automated fail-closed probe terminates the loopback proxy during an in-flight Codex request and proves that Codex exits with an error without attempting a direct model fallback.
 
+**Current CLI hardening:** the protected child receives temporary `features.apps=false` and `features.enable_request_compression=false` overrides. Apps/MCP startup is disabled for that child only, and forwarded arguments that try to override `features.apps` are rejected. Revalidation with `codex-cli 0.145.0-alpha.27` observed zero unexpected non-loopback connection attempts after the loopback proxy was terminated.
+
 ```bash
 go run ./scripts/verify-codex-fail-closed
 ```
@@ -117,6 +119,8 @@ While the proxy is running, open `http://127.0.0.1:8080/dashboard` (or the dynam
 ## OpenAI Build Week extension
 
 Before the submission period, the repository already contained the Go masking engine, request-scoped vault, provider adapters, explicit and MITM proxies, metrics dashboard, IDE integrations, packaging, and tests. This submission adds the production-path deterministic demo, Codex Safe Session launcher, explainable bounded privacy trace, complete placeholder-boundary handling, nested-placeholder hardening, expanded verification, dual-name release path, and judge/submission documentation.
+
+We used Codex with GPT-5.6 to develop, test, review, and security-harden Anonmyz.
 
 Codex with GPT-5.6 was used to inspect the existing architecture and history, verify current Codex CLI/provider configuration against the installed CLI and official source, implement the extension, exercise failure paths, and review the final diff. Human decisions defined the product scope, local-only trust boundary, supported authentication workflows, live-test safety constraints, and retention/security model. See [BUILD_WEEK.md](BUILD_WEEK.md) for the exact submission narrative and recording script.
 

@@ -1,4 +1,4 @@
-# Technical Architecture — Local AI Firewall
+# Technical Architecture — Anonmyz (Local AI Firewall)
 
 This document provides a deep dive into the internal design, package responsibilities, and data-flow sequences of the Local AI Firewall.
 
@@ -51,17 +51,19 @@ sequenceDiagram
 
 ## Package Structure & Responsibilities
 
-The codebase is split into 7 isolated packages to prevent circular dependencies and follow clean architecture practices:
+The main request pipeline is organized into seven focused packages, with `audit/` and `mitm/` providing the local privacy trace and optional TLS interception path:
 
 ```
-github.com/localai/firewall/
+github.com/3mre0s/ai-firewall/
+├── audit/              - Bounded, metadata-only local privacy trace.
 ├── config/             - Application settings, default values, env-var loader.
 ├── vault/              - In-memory thread-safe key-value vault.
 ├── patterns/           - Regular expressions registry grouped by sensitivity categories.
 ├── masker/             - Replaces secrets with vault placeholders and vice-versa.
 ├── providers/          - Protocol adapters mapping upstream endpoints to headers/rules.
 ├── proxy/              - Reverse proxy server implementation, streaming buffer, handler.
-└── metrics/            - Lock-free global counters and metrics HTTP handler.
+├── metrics/            - Lock-free global counters and metrics HTTP handler.
+└── mitm/               - Optional allow-listed CONNECT/TLS interception.
 ```
 
 ### 1. `config` (Yapılandırma)
@@ -98,7 +100,7 @@ Chunk 2: "DEADC0DE]] - keep it safe."
 
 If we try to unmask Chunk 1 immediately, the label `[[WIN_PATH_DEADC0DE]]` is truncated, fails to match, and is leaked to the client as plain placeholder. 
 
-**Solution (`safeCutpoint`):**
+**Solution (`SafeCutpoint`):**
 1. Each incoming chunk is written into `streamProcessor.buf`.
 2. The processor searches for the index of the last unclosed opening bracket `[[`.
 3. If an unclosed `[[` is found, the processor cuts the buffer at that index:

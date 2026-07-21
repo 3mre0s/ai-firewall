@@ -4,7 +4,12 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/masker"
+	"github.com/3mre0s/ai-firewall/vault"
 )
 
 // TestIsAIHostExact verifies that isAIHost intercepts only whitelisted providers
@@ -111,5 +116,34 @@ func TestReadMITMBodyDetectsOversize(t *testing.T) {
 	}
 	if !tooLarge {
 		t.Fatal("oversized body was not rejected")
+	}
+}
+
+func TestUnmaskStandardResponseFailsClosed(t *testing.T) {
+	cfg := config.LoadForTest()
+	requestMasker := masker.New(vault.New(cfg.VaultSizeLimit), cfg)
+	t.Cleanup(requestMasker.Reset)
+
+	original := "ghp_" + strings.Repeat("a", 36)
+	masked := requestMasker.Mask(`{"token":"` + original + `"}`)
+	if masked.MaskedCount != 1 {
+		t.Fatalf("masked count = %d, want 1", masked.MaskedCount)
+	}
+
+	restored, safe := unmaskStandardResponse([]byte(masked.Text), requestMasker)
+	if !safe {
+		t.Fatal("response containing a known placeholder was rejected")
+	}
+	if !bytes.Contains(restored, []byte(original)) {
+		t.Fatal("known placeholder was not restored")
+	}
+
+	for _, unsafe := range []string{
+		original,
+		"ghp_" + strings.Repeat("b", 36),
+	} {
+		if body, safe := unmaskStandardResponse([]byte(unsafe), requestMasker); safe || body != nil {
+			t.Fatalf("unsafe response was accepted: %q", unsafe)
+		}
 	}
 }

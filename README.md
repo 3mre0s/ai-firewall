@@ -151,7 +151,7 @@ Expand-Archive ai-firewall.zip -DestinationPath .
 
 **2. Install VS Code extension**
 
-Download `local-ai-firewall.vsix` from the [latest release](../../releases/latest), then:
+Download `local-ai-firewall.vsix` from the [latest release](https://github.com/3mre0s/ai-firewall/releases/latest), then:
 
 ```bash
 code --install-extension local-ai-firewall.vsix
@@ -212,7 +212,7 @@ Detected values are masked on the way out and restored on the way back. The prov
 
 ### 1. Get the binary
 
-**Manual download:** grab the archive for your platform from the [Releases](../../releases) page, extract it, and put `ai-firewall` on your `PATH`.
+**Manual download:** grab the archive for your platform from the [Releases](https://github.com/3mre0s/ai-firewall/releases) page, extract it, and put `ai-firewall` on your `PATH`.
 
 ```bash
 # Linux / macOS example
@@ -293,7 +293,7 @@ Use `FORWARD_API_KEY=none` if you authenticate with a subscription token (Claude
 **Request path**
 
 1. Your AI tool sends a prompt to the firewall.
-2. The firewall scans the request body against all patterns and replaces each match with a deterministic token (e.g. `[[GH_PAT_3F9A1C2E]]`).
+2. The firewall scans the request body against all patterns and replaces each match with a cryptographically random, request-scoped placeholder (e.g. `[[GH_PAT_3F9A1C2E]]`).
 3. The token→secret mapping is stored in an in-memory vault — never on disk.
 4. The sanitised request is forwarded to the real provider with your API key injected.
 
@@ -331,7 +331,7 @@ All settings come from environment variables. No config file is needed or suppor
 ```
 anonmyz                    Start the proxy server (reads config from env vars).
 anonmyz demo               Run the local, key-free security proof.
-anonmyz codex -- [args]    Launch an API-key Codex session through Anonmyz.
+anonmyz codex -- [args]    Launch a ChatGPT- or API-key-authenticated Codex session through Anonmyz.
 anonmyz install-ca         Install the optional MITM CA into the system trust store.
 anonmyz uninstall-ca       Remove the optional MITM CA from the system trust store.
 anonmyz version            Print the build version.
@@ -390,15 +390,10 @@ go build -o anonmyz .
 ```bash
 go test ./...
 go vet ./...
+gofmt -l .
 ```
 
-**Benchmarks:**
-
-```bash
-go test -bench=. -benchmem ./...
-# BenchmarkStreamProcessing: ~28 µs/op · 4 allocs/op   (clean SSE chunk, no secrets)
-# BenchmarkMasking:          ~33 µs/op · 101 allocs/op  (request body with PAT + email)
-```
+`gofmt -l .` should produce no output. CI also runs the test suite with the race detector and cross-compiles the supported release matrix.
 
 ---
 

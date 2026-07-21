@@ -36,3 +36,14 @@ node_modules/
 *.swo
 .DS_Store
 .aider*
+
+# Local review, export, and submission-rendering artifacts
+*.diff
+*.backup.*
+/Only-Codes/
+/release-clean/
+/submission/video-out/
+/implementation_plan.md
+/local_security*.txt
+/Microsoft.Services.Store.winmd
+/tatus --short

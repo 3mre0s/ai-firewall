@@ -432,7 +432,13 @@ readRequest:
 			log.Printf("[mitm][error] read response body failed: %v", err)
 			return
 		}
-		standardBody = []byte(requestMasker.Unmask(string(raw)))
+		var safe bool
+		standardBody, safe = unmaskStandardResponse(raw, requestMasker)
+		if !safe {
+			log.Printf("[mitm][error] secret detected in standard response - suppressing body")
+			writeMITMError(tlsConn, http.StatusBadGateway, "unsafe upstream response rejected")
+			return
+		}
 	}
 
 	// Write response status line.
@@ -587,6 +593,18 @@ func writeChunk(conn *tls.Conn, data []byte) error {
 	}
 	_, err := conn.Write([]byte("\r\n"))
 	return err
+}
+
+// unmaskStandardResponse restores request-scoped placeholders only after
+// confirming that the upstream did not emit an original request value or an
+// unrelated credential-shaped value. The explicit proxy and streaming MITM
+// paths enforce the same fail-closed rule.
+func unmaskStandardResponse(raw []byte, requestMasker *masker.Masker) ([]byte, bool) {
+	text := string(raw)
+	if requestMasker.ContainsOriginal(text) || requestMasker.HasCredentialSecrets(text) {
+		return nil, false
+	}
+	return []byte(requestMasker.Unmask(text)), true
 }
 
 func writeMITMError(conn io.Writer, status int, message string) {

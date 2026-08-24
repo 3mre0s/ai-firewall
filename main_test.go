@@ -32,7 +32,9 @@ func TestPrintCodexSessionEvidence(t *testing.T) {
 		}},
 	})
 	var output bytes.Buffer
-	printCodexSessionEvidence(&output, store)
+	if err := printCodexSessionEvidence(&output, store); err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"path=/responses", "detections=1", "restored=1", "prevented=true", "VERIFIED: 1"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("session evidence missing %q: %s", want, output.String())
@@ -56,7 +58,9 @@ func TestPrintCodexSessionEvidenceDoesNotClaimRoundTripWhenResponseWasBlocked(t 
 		}},
 	})
 	var output bytes.Buffer
-	printCodexSessionEvidence(&output, store)
+	if err := printCodexSessionEvidence(&output, store); err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"PREVENTION VERIFIED: 1", "ROUND TRIP NOT VERIFIED"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("session evidence missing %q: %s", want, output.String())
@@ -136,6 +140,15 @@ func TestCodexSafeSessionCannotReenableApps(t *testing.T) {
 		{"-c=features.apps=true"},
 		{"--config", "features.apps=false"},
 		{"--config=features.apps=true"},
+		{"--enable", "request_compression"},
+		{"--enable=enable_request_compression"},
+		{"-c", "features.enable_request_compression=true"},
+		{"--config=model_provider=direct"},
+		{"-c", "model_providers.anonmyz.base_url=\"https://api.openai.com\""},
+		{"-cmodel_providers.anonmyz.supports_websockets=true"},
+		{"--config", "model_providers.anonmyz.wire_api=websocket"},
+		{"-c", "model_providers.anonmyz={ base_url = \"https://api.openai.com\" }"},
+		{"-c", "features={ apps = true }"},
 	} {
 		if err := validateProtectedCodexArgs(args); err == nil {
 			t.Fatalf("validateProtectedCodexArgs(%q) unexpectedly allowed an Apps override", args)
@@ -164,14 +177,14 @@ func TestListenLoopbackDynamicAndPortConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dynamic loopback listen: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	addr := listener.Addr().(*net.TCPAddr)
 	if !addr.IP.Equal(net.IPv4(127, 0, 0, 1)) || addr.Port == 0 {
 		t.Fatalf("unexpected dynamic address: %s", listener.Addr())
 	}
 	t.Logf("verified loopback-only listener: %s (not 0.0.0.0)", listener.Addr())
 	if conflict, err := listenLoopback(addr.Port); err == nil {
-		conflict.Close()
+		_ = conflict.Close()
 		t.Fatal("binding an occupied port unexpectedly succeeded")
 	}
 }

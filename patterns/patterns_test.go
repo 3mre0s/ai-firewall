@@ -113,3 +113,15 @@ func TestPatternsRegistry(t *testing.T) {
 		})
 	}
 }
+
+func TestAnalyzeTextFeaturePrefilter(t *testing.T) {
+	features := AnalyzeText(`safe-Value_1@example.com:/tmp\\file`)
+	want := FeatureDigit | FeatureUpper | FeatureHyphen | FeatureUnderscore |
+		FeatureDot | FeatureAt | FeatureSlash | FeatureBackslash | FeatureAssignmentSeparator
+	if features&want != want {
+		t.Fatalf("AnalyzeText() = %09b, want all %09b", features, want)
+	}
+	if Registry[0].MayMatch(AnalyzeText("plain lowercase text")) {
+		t.Fatal("hyphen-requiring pattern accepted text without a hyphen")
+	}
+}

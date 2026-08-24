@@ -2,6 +2,8 @@
 
 Run the firewall as a local sidecar from IntelliJ IDEA, GoLand, PyCharm, WebStorm, or another JetBrains IDE.
 
+Binary discovery is intentionally limited to configured and trusted installation locations; project-root executables are never auto-selected. Resolver behavior is covered by Gradle unit tests in CI.
+
 ## Beta install (no Marketplace required)
 
 1. Download the matching `ai-firewall` binary for your OS from the latest GitHub Release and drop it in one of these auto-discovered locations:
@@ -48,4 +50,7 @@ Commands are available from `Tools > Local AI Firewall`:
 - `Copy Agent Env`
 - `Open Metrics`
 
-The plugin searches for the binary in this order: `AI_FIREWALL_BINARY` env, project root, OS-standard install dirs, then everything on `PATH`.
+The plugin searches for the binary in this order: `AI_FIREWALL_BINARY` env,
+OS-standard install dirs, then everything on `PATH`. Project-root binaries are
+intentionally ignored because the selected process receives your provider
+credential.

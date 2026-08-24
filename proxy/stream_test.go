@@ -167,3 +167,34 @@ func TestStreamProcessorRestoresPlaceholderAtEveryBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamProcessorBlocksRawCredentialAtEveryBoundary(t *testing.T) {
+	secret := "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+	for boundary := 1; boundary < len(secret); boundary++ {
+		t.Run(fmt.Sprintf("byte_%d", boundary), func(t *testing.T) {
+			m, _ := newTestMaskerWithVault(10)
+			processor := NewStreamProcessor(m)
+			var got strings.Builder
+			got.WriteString(processor.Process([]byte("prefix " + secret[:boundary])))
+			got.WriteString(processor.Process([]byte(secret[boundary:] + " suffix")))
+			got.WriteString(processor.Flush())
+			if !processor.LeakDetected() {
+				t.Fatal("split raw credential was not classified as a leak")
+			}
+			if strings.Contains(got.String(), secret) {
+				t.Fatalf("complete credential leaked to client: %q", got.String())
+			}
+		})
+	}
+}
+
+func TestReadLimitedBody(t *testing.T) {
+	raw, tooLarge, err := readLimitedBody(strings.NewReader("123456"), 5)
+	if err != nil || !tooLarge || string(raw) != "123456" {
+		t.Fatalf("readLimitedBody oversized = %q, %v, %v", raw, tooLarge, err)
+	}
+	raw, tooLarge, err = readLimitedBody(strings.NewReader("12345"), 5)
+	if err != nil || tooLarge || string(raw) != "12345" {
+		t.Fatalf("readLimitedBody at limit = %q, %v, %v", raw, tooLarge, err)
+	}
+}

@@ -1,6 +1,6 @@
 # Security Policy
 
-Local AI Firewall is a security tool, so we take reports about its own
+Anonmyz is a security tool, so we take reports about its own
 weaknesses seriously. This document explains what is in scope, how to report
 an issue, and what to expect in return.
 
@@ -8,11 +8,7 @@ an issue, and what to expect in return.
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, report privately through one of:
-
-- GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-  (the **Security** tab → *Report a vulnerability*), or
-- email to `<security-contact>` (replace with your address before publishing).
+Report privately through [GitHub private vulnerability reporting](https://github.com/3mre0s/ai-firewall/security/advisories/new), or open the repository's **Security** tab and choose *Report a vulnerability*. Do not include real credentials in the report; use synthetic fixtures and provide sensitive supporting material only through the private advisory thread.
 
 When reporting, please include:
 
@@ -43,10 +39,8 @@ In scope — issues in this repository that could:
 Out of scope:
 
 - the **known limitations** already documented in
-  [THREAT_MODEL.md](THREAT_MODEL.md) (e.g. the SHA-256 key-derivation trade-off,
-  or secrets split across SSE chunk boundaries) — these are acknowledged, and
-  hardening them is tracked as ordinary roadmap work rather than as
-  vulnerabilities,
+  [THREAT_MODEL.md](THREAT_MODEL.md) — these are acknowledged, and hardening
+  them is tracked as ordinary roadmap work rather than as vulnerabilities,
 - attacks that require an adversary already running code as your user on the
   same machine (this tool does not claim to defend against local malware),
 - detection-coverage gaps (a pattern that does not yet exist for some secret

@@ -34,14 +34,20 @@ type Masker struct {
 	vault        *vault.Vault
 	cfg          *config.Config
 	labelPattern *regexp.Regexp // matches any label emitted by generateLabel
+	recorder     metrics.Recorder
 }
 
 // New creates a Masker backed by the given Vault and Config.
 // (Verilen Vault ve Config ile desteklenen bir Masker oluşturur.)
-func New(v *vault.Vault, cfg *config.Config) *Masker {
+func New(v *vault.Vault, cfg *config.Config, recorders ...metrics.Recorder) *Masker {
+	recorder := metrics.NopRecorder()
+	if len(recorders) > 0 && recorders[0] != nil {
+		recorder = recorders[0]
+	}
 	return &Masker{
-		vault: v,
-		cfg:   cfg,
+		vault:    v,
+		cfg:      cfg,
+		recorder: recorder,
 		// Matches: [[PREFIX_8HEXDIGITS]]  e.g. [[GH_PAT_3F7A1B2C]]
 		// (Örneğin [[GH_PAT_3F7A1B2C]] biçimindeki etiketleri eşleştirir.)
 		labelPattern: regexp.MustCompile(`\[\[[A-Z_]+_[0-9A-F]{8}\]\]`),
@@ -52,7 +58,7 @@ func New(v *vault.Vault, cfg *config.Config) *Masker {
 // A provider sees the placeholders sent upstream; keeping labels process-wide
 // would let a placeholder from one request restore a secret in another.
 func (m *Masker) NewScope() *Masker {
-	return New(vault.New(m.cfg.VaultSizeLimit), m.cfg)
+	return New(vault.New(m.cfg.VaultSizeLimit), m.cfg, m.recorder)
 }
 
 // Reset clears all secrets retained by this masker scope.
@@ -129,6 +135,7 @@ func (m *Masker) Mask(text string) MaskResult {
 	// Local cache to reuse labels for identical sensitive values within this request.
 	// (Bu istekteki aynı hassas değerler için etiketleri yeniden kullanmak üzere yerel önbellek.)
 	seen := make(map[string]string)
+	features := patterns.AnalyzeText(text)
 
 	for _, p := range patterns.Registry {
 		// Honour per-category config switches (kategori bazlı yapılandırma anahtarlarını dikkate al)
@@ -136,6 +143,9 @@ func (m *Masker) Mask(text string) MaskResult {
 			continue
 		}
 		if p.Type == patterns.TypePII && !m.cfg.MaskEmails {
+			continue
+		}
+		if !p.MayMatch(features) {
 			continue
 		}
 
@@ -158,6 +168,12 @@ func (m *Masker) Mask(text string) MaskResult {
 // maskFull replaces the entire regex match with a single label.
 // (Tüm regex eşleşmesini tek bir etiketle değiştirir.)
 func (m *Masker) maskFull(text string, p patterns.SensitivePattern, r *MaskResult, seen map[string]string) string {
+	// regexp.ReplaceAllStringFunc allocates an output buffer proportional to the
+	// full input even when there is no match. Most large request bodies contain
+	// no value for most registry entries, so avoid that copy on the common path.
+	if !p.Regex.MatchString(text) {
+		return text
+	}
 	return p.Regex.ReplaceAllStringFunc(text, func(match string) string {
 		if p.Validate != nil && !p.Validate(match) {
 			return match // failed checksum / semantic validation — leave as-is
@@ -174,7 +190,7 @@ func (m *Masker) maskFull(text string, p patterns.SensitivePattern, r *MaskResul
 		label := generateLabel(p.Prefix)
 		if err := m.vault.Store(label, match); err != nil {
 			log.Printf("[WARN] vault full (kasa dolu) — %s left unmasked: %v", p.Name, err)
-			metrics.Global.IncVaultEvictions()
+			m.recorder.IncVaultEvictions()
 			r.VaultEvictions++
 			return match
 		}
@@ -195,6 +211,9 @@ func (m *Masker) maskFull(text string, p patterns.SensitivePattern, r *MaskResul
 //
 //	çevreleyen bağlamı (örn. "Bearer" anahtar kelimesi) korur.)
 func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResult, seen map[string]string) string {
+	if !p.Regex.MatchString(text) {
+		return text
+	}
 	return p.Regex.ReplaceAllStringFunc(text, func(match string) string {
 		subs := p.Regex.FindStringSubmatch(match)
 		if len(subs) <= p.GroupIndex {
@@ -225,7 +244,7 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 
 		if err := m.vault.Store(label, value); err != nil {
 			log.Printf("[WARN] vault full (kasa dolu) — %s left unmasked: %v", p.Name, err)
-			metrics.Global.IncVaultEvictions()
+			m.recorder.IncVaultEvictions()
 			r.VaultEvictions++
 			return match
 		}
@@ -255,11 +274,15 @@ func (m *Masker) maskGroup(text string, p patterns.SensitivePattern, r *MaskResu
 //	Mask'ın aksine Vault'u veya herhangi bir durumu değiştirmez — salt okunur
 //	bir kontrol. Akış fail-fast mekanizması tarafından kullanılır.)
 func (m *Masker) HasSecrets(text string) bool {
+	features := patterns.AnalyzeText(text)
 	for _, p := range patterns.Registry {
 		if p.Type == patterns.TypePath && !m.cfg.MaskPaths {
 			continue
 		}
 		if p.Type == patterns.TypePII && !m.cfg.MaskEmails {
+			continue
+		}
+		if !p.MayMatch(features) {
 			continue
 		}
 		if p.Validate == nil {
@@ -293,13 +316,21 @@ func (m *Masker) ContainsOriginal(text string) bool {
 	return m.vault.ContainsOriginal(text)
 }
 
+func (m *Masker) HasOriginals() bool {
+	return m.vault.HasEntries()
+}
+
 // HasCredentialSecrets reports credential-like output independently of the
 // request vault. Paths and PII are excluded here because model response
 // envelopes can legitimately contain workspace metadata; exact request values
 // in those categories are still caught by ContainsOriginal.
 func (m *Masker) HasCredentialSecrets(text string) bool {
+	features := patterns.AnalyzeText(text)
 	for _, p := range patterns.Registry {
 		if p.Type == patterns.TypePath || p.Type == patterns.TypePII {
+			continue
+		}
+		if !p.MayMatch(features) {
 			continue
 		}
 		if p.Validate == nil {

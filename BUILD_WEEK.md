@@ -66,7 +66,7 @@ Safe Session was designed against the installed `codex-cli 0.137.0` help, the cu
 
 Codex receives a temporary custom Responses provider whose base URL is the local proxy. An exported `OPENAI_API_KEY` is referenced through `env_key`; a stored Codex API-key or ChatGPT login is preserved through `requires_openai_auth`. Codex continues to manage its own authentication, while Anonmyz passes the required authorization and ChatGPT account headers through and masks only request bodies. The protected provider has WebSocket support disabled, and request compression is disabled for the child session, so traffic stays on the inspected HTTP path.
 
-Current-CLI revalidation used `codex-cli 0.145.0-alpha.27`. Safe Session now applies a temporary `features.apps=false` override to the protected child, rejects forwarded attempts to re-enable Apps, and leaves the user's global configuration and `CODEX_HOME` unchanged. The fail-closed probe requires a literal loopback model URL and fails on any request reaching its external-egress trap; no OpenAI or `chatgpt.com` hostname is allowlisted.
+Current-CLI revalidation used `codex-cli 0.145.0-alpha.27`. Safe Session applies temporary `features.apps=false` and request-compression-disabled overrides to the protected child. Forwarded arguments cannot change the model-provider route, the `anonmyz` provider definition, Apps, or request-compression features. The user's global configuration and `CODEX_HOME` remain unchanged. The fail-closed probe requires a literal loopback model URL and fails on any request reaching its external-egress trap; no OpenAI or `chatgpt.com` hostname is allowlisted.
 
 ## Privacy and threat model
 
@@ -78,7 +78,8 @@ Anonmyz protects against accidental disclosure of values matching its configured
 - Request bodies are fully buffered and limited to 32 MiB before masking.
 - Vault exhaustion blocks the request instead of forwarding partially masked data.
 - Compressed request and upstream bodies are rejected because scanning them as plaintext would be unsafe.
-- SSE buffering is bounded. A raw secret detected in an upstream chunk is suppressed and terminates the stream, but bytes already flushed before a later malicious chunk cannot be recalled.
+- SSE buffering is bounded. A 64 KiB raw inspection look-behind detects supported credentials split across network reads; a match suppresses the completing output and terminates the stream, but bytes already flushed before a later malicious value cannot be recalled.
+- Standard upstream responses are buffered for inspection and capped at 64 MiB in explicit-proxy and MITM paths.
 - Provider authentication headers necessarily reach the configured provider; body DLP does not redact the credential used to authenticate that request.
 - Traffic that bypasses the configured explicit or MITM proxy is not protected.
 

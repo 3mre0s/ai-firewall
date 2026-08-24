@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,12 +22,14 @@ import (
 	"time"
 
 	"github.com/3mre0s/ai-firewall/config"
+	"github.com/3mre0s/ai-firewall/dlp"
 	"github.com/3mre0s/ai-firewall/masker"
-	"github.com/3mre0s/ai-firewall/proxy"
+	"github.com/3mre0s/ai-firewall/securitylog"
 )
 
 // ════════════════════════════════════════════════════════════════════════════
 const maxMITMRequestBody = 32 << 20
+const maxMITMStandardResponseBody = 64 << 20
 
 // ════════════════════════════════════════════════════════════════════════════
 // MITMProxy — Transparent MITM Proxy Handler
@@ -59,6 +62,7 @@ type MITMProxy struct {
 	// httpClient is a shared HTTP client for forwarding requests to AI APIs.
 	// (Paylaşılan HTTP istemcisi, AI API'lerine istek iletmek için kullanılır.)
 	httpClient *http.Client
+	engine     *dlp.Engine
 }
 
 // NewMITMProxy creates a new MITM proxy handler.
@@ -86,6 +90,7 @@ func NewMITMProxy(ca *CA, m *masker.Masker, cfg *config.Config) *MITMProxy {
 				},
 			},
 		},
+		engine: dlp.NewEngine(m, maxMITMStandardResponseBody),
 	}
 }
 
@@ -239,7 +244,7 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 		log.Printf("[mitm][error] hijack failed: %v", err)
 		return
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		log.Printf("[mitm][error] write connection established failed: %v", err)
 		return
@@ -265,7 +270,7 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 	// Wrap the client connection with TLS.
 	// (İstemci bağlantısını TLS ile sar.)
 	tlsConn := tls.Server(clientConn, tlsConfig)
-	defer tlsConn.Close()
+	defer func() { _ = tlsConn.Close() }()
 
 	// Set timeout for TLS handshake.
 	// (TLS el sıkışması için zaman aşımı ayarla.)
@@ -283,7 +288,10 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 
 	// Reset deadline for normal operation.
 	// (Normal işlem için zaman aşımını sıfırla.)
-	tlsConn.SetDeadline(time.Time{})
+	if err := tlsConn.SetDeadline(time.Time{}); err != nil {
+		log.Printf("[mitm][error] clear deadline failed: %v", err)
+		return
+	}
 
 	log.Printf("[mitm][info] TLS handshake complete with client for %s", host)
 
@@ -291,49 +299,60 @@ func (p *MITMProxy) handleMITMTunnel(w http.ResponseWriter, r *http.Request, hos
 	// requests can be processed without losing bytes already read ahead.
 	clientReader := bufio.NewReader(tlsConn)
 
-readRequest:
+	for p.handleMITMRequest(tlsConn, clientReader, r.Host) {
+	}
+}
+
+// handleMITMRequest processes exactly one decrypted HTTP request. Returning true
+// keeps the HTTP/1.1 connection alive for the next request. All request-scoped
+// secrets and upstream bodies are closed before this function returns.
+func (p *MITMProxy) handleMITMRequest(tlsConn *tls.Conn, clientReader *bufio.Reader, authority string) bool {
+	requestID := securitylog.NewRequestID()
 	req, err := http.ReadRequest(clientReader)
 	if err != nil {
 		log.Printf("[mitm][error] read HTTP request failed: %v", err)
-		return
+		return false
 	}
 
 	encoding := strings.TrimSpace(req.Header.Get("Content-Encoding"))
 	if encoding != "" && !strings.EqualFold(encoding, "identity") {
+		securitylog.Event("mitm", "warn", requestID, "request_blocked", "compressed request body rejected", nil)
 		writeMITMError(tlsConn, http.StatusUnsupportedMediaType, "compressed request bodies are not supported")
-		return
+		return false
 	}
 
 	body, tooLarge, err := readMITMBody(req.Body)
 	_ = req.Body.Close()
 	if err != nil {
 		log.Printf("[mitm][error] read request body failed: %v", err)
-		return
+		return false
 	}
 	if tooLarge {
+		securitylog.Event("mitm", "warn", requestID, "request_blocked", "request body too large", nil)
 		writeMITMError(tlsConn, http.StatusRequestEntityTooLarge, "request body too large")
-		return
+		return false
 	}
 
-	log.Printf("[mitm][info] → %s %s", req.Method, req.URL.Path)
+	securitylog.Event("mitm", "info", requestID, "request_started", "request entered DLP pipeline", map[string]any{"method": req.Method, "path": req.URL.Path, "authority": authority})
 
 	// ── Step 1: Mask sensitive data in the request body ─────────────────────
 	// (Adım 1: İstek gövdesindeki hassas verileri maskele)
-	requestMasker := p.masker.NewScope()
-	defer requestMasker.Reset()
-	maskResult := requestMasker.Mask(string(body))
+	exchange, prepareErr := p.engine.Prepare(body)
+	if exchange != nil {
+		defer exchange.Close()
+	}
+	maskResult := exchange.Mask
 
 	if maskResult.MaskedCount > 0 {
-		log.Printf("[mitm][info] 🛡 masked %d item(s)", maskResult.MaskedCount)
+		securitylog.Event("mitm", "info", requestID, "request_masked", "sensitive values replaced", map[string]any{"count": maskResult.MaskedCount})
 	}
 
 	// Vault-full guard: if any sensitive value could not be masked because the
 	// vault was at capacity, we block the request.
 	// (Kasa dolu koruması: kasa kapasitesi dolduğu için maskelenememiş hassas
 	//	bir değer varsa isteği engelle.)
-	if maskResult.VaultEvictions > 0 {
-		log.Printf("[mitm][error] 🚨 vault full — %d secret(s) could not be masked, request blocked",
-			maskResult.VaultEvictions)
+	if errors.Is(prepareErr, dlp.ErrVaultFull) {
+		securitylog.Event("mitm", "error", requestID, "request_blocked", "vault capacity exceeded", map[string]any{"unmasked_count": maskResult.VaultEvictions})
 		// Send error response back to client.
 		// (İstemciye hata yanıtı gönder.)
 		resp := &http.Response{
@@ -343,8 +362,14 @@ readRequest:
 			Header:     make(http.Header),
 		}
 		resp.Header.Set("Content-Type", "application/json")
-		resp.Write(tlsConn)
-		return
+		if err := resp.Write(tlsConn); err != nil {
+			securitylog.Event("mitm", "error", requestID, "client_write_error", "vault-full response write failed", nil)
+		}
+		return false
+	}
+	if prepareErr != nil {
+		writeMITMError(tlsConn, http.StatusInternalServerError, "request inspection failed")
+		return false
 	}
 
 	// ── Step 2: Forward masked request to the real AI API ────────────────
@@ -352,14 +377,14 @@ readRequest:
 	// Build the upstream URL.
 	// (Upstream URL'sini oluştur.)
 	// Preserve the CONNECT authority, including non-default ports.
-	upstreamURL := mitmUpstreamURL(r.Host, req.URL.Path, req.URL.RawQuery)
+	upstreamURL := mitmUpstreamURL(authority, req.URL.Path, req.URL.RawQuery)
 
 	// Create a new request to the upstream.
 	// (Upstream'e yeni bir istek oluştur.)
 	upstreamReq, err := http.NewRequestWithContext(req.Context(), req.Method, upstreamURL, bytes.NewBufferString(maskResult.Text))
 	if err != nil {
 		log.Printf("[mitm][error] create upstream request failed: %v", err)
-		return
+		return false
 	}
 
 	// Copy headers from the client request.
@@ -389,16 +414,17 @@ readRequest:
 	// (İsteği gerçek API'ye ilet.)
 	resp, err := p.httpClient.Do(upstreamReq)
 	if err != nil {
-		log.Printf("[mitm][error] upstream request failed: %v", err)
-		return
+		securitylog.Event("mitm", "error", requestID, "upstream_error", "upstream request failed", nil)
+		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		securitylog.Event("mitm", "error", requestID, "response_blocked", "compressed upstream response rejected", map[string]any{"status": resp.StatusCode})
 		writeMITMError(tlsConn, http.StatusBadGateway, "compressed upstream response rejected")
-		return
+		return false
 	}
 
-	log.Printf("[mitm][info] ← upstream %d", resp.StatusCode)
+	securitylog.Event("mitm", "info", requestID, "upstream_response", "upstream response received", map[string]any{"status": resp.StatusCode})
 
 	// ── Step 3: Unmask and deliver the response ───────────────────────────
 	// (Adım 3: Yanıtın maskesini kaldır ve ilet)
@@ -427,18 +453,13 @@ readRequest:
 	//  "Transfer-Encoding: chunked" çerçevelememizle yeniden çerçeveliyoruz.)
 	var standardBody []byte
 	if !isStream {
-		raw, err := io.ReadAll(resp.Body)
+		result, err := p.engine.RestoreStandard(exchange, resp.Body)
 		if err != nil {
-			log.Printf("[mitm][error] read response body failed: %v", err)
-			return
-		}
-		var safe bool
-		standardBody, safe = unmaskStandardResponse(raw, requestMasker)
-		if !safe {
-			log.Printf("[mitm][error] secret detected in standard response - suppressing body")
+			securitylog.Event("mitm", "error", requestID, "response_blocked", "standard response rejected", map[string]any{"reason": err.Error()})
 			writeMITMError(tlsConn, http.StatusBadGateway, "unsafe upstream response rejected")
-			return
+			return false
 		}
+		standardBody = result.Body
 	}
 
 	// Write response status line.
@@ -446,7 +467,7 @@ readRequest:
 	text := fmt.Sprintf("HTTP/1.1 %s\r\n", resp.Status)
 	if _, err := tlsConn.Write([]byte(text)); err != nil {
 		log.Printf("[mitm][error] write status line failed: %v", err)
-		return
+		return false
 	}
 
 	// Copy response headers to the client, skipping hop-by-hop headers and
@@ -465,7 +486,7 @@ readRequest:
 			_, err := fmt.Fprintf(tlsConn, "%s: %s\r\n", key, value)
 			if err != nil {
 				log.Printf("[mitm][error] write header failed: %v", err)
-				return
+				return false
 			}
 		}
 	}
@@ -473,39 +494,41 @@ readRequest:
 	if isStream {
 		if _, err := tlsConn.Write([]byte("Transfer-Encoding: chunked\r\n")); err != nil {
 			log.Printf("[mitm][error] write transfer-encoding header failed: %v", err)
-			return
+			return false
 		}
 	} else {
 		if _, err := fmt.Fprintf(tlsConn, "Content-Length: %d\r\n", len(standardBody)); err != nil {
 			log.Printf("[mitm][error] write content-length header failed: %v", err)
-			return
+			return false
 		}
+	}
+	if _, err := fmt.Fprintf(tlsConn, "X-Anonmyz-Request-Id: %s\r\n", requestID); err != nil {
+		log.Printf("[mitm][error] write request id header failed: %v", err)
+		return false
 	}
 
 	// End of headers.
 	// (Başlıkların sonu.)
 	if _, err := tlsConn.Write([]byte("\r\n")); err != nil {
 		log.Printf("[mitm][error] write header separator failed: %v", err)
-		return
+		return false
 	}
 
 	if isStream {
 		// Handle streaming response with chunk-by-chunk unmasking.
 		// (Akış yanıtını parça parça maskeleme kaldırma ile işle.)
-		if !p.handleStreamResponse(tlsConn, resp.Body, requestMasker) {
-			return
+		if !p.handleStreamResponse(tlsConn, resp.Body, exchange.Masker, requestID) {
+			return false
 		}
 	} else {
 		if _, err := tlsConn.Write(standardBody); err != nil {
 			log.Printf("[mitm][error] write unmasked response failed: %v", err)
+			return false
 		}
 	}
+	securitylog.Event("mitm", "info", requestID, "response_restored", "response delivered", map[string]any{"streaming": isStream})
 
-	if !req.Close && !resp.Close {
-		_ = resp.Body.Close()
-		requestMasker.Reset()
-		goto readRequest
-	}
+	return !req.Close && !resp.Close
 }
 
 // handleStreamResponse processes SSE response chunk-by-chunk with unmasking.
@@ -525,10 +548,10 @@ readRequest:
 //	Tespit noktasından önce bağlantıya yazılmış chunk'lar geri alınamaz —
 //	bu temel bir HTTP/TLS streaming kısıtıdır. İstemci eksiksiz bir yanıt
 //	yerine beklenmedik bir bağlantı kapanması alır.)
-func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader, requestMasker *masker.Masker) bool {
+func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader, requestMasker *masker.Masker, requestID string) bool {
 	// Reuse the StreamProcessor from proxy package.
 	// (proxy paketinden StreamProcessor'u yeniden kullan.)
-	processor := proxy.NewStreamProcessor(requestMasker)
+	processor := dlp.NewStreamProcessor(requestMasker)
 	buf := make([]byte, 4096)
 
 	for {
@@ -538,7 +561,7 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader, request
 			// Fail-fast: secret in stream output — close connection immediately.
 			// (Hızlı başarısızlık: akış çıktısında sır — bağlantıyı derhal kapat.)
 			if processor.LeakDetected() {
-				log.Printf("[mitm][error] 🚨 secret detected in stream — terminating connection")
+				securitylog.Event("mitm", "error", requestID, "response_blocked", "secret detected in stream", nil)
 				return false
 			}
 			if out != "" {
@@ -560,7 +583,7 @@ func (p *MITMProxy) handleStreamResponse(conn *tls.Conn, body io.Reader, request
 	// (Kalan arabelleğe alınmış içeriği temizle.)
 	tail := processor.Flush()
 	if processor.LeakDetected() {
-		log.Printf("[mitm][error] 🚨 secret in stream tail — terminating")
+		securitylog.Event("mitm", "error", requestID, "response_blocked", "secret detected in stream tail", nil)
 		return false
 	}
 	if tail != "" {

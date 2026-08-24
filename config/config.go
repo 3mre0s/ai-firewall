@@ -5,6 +5,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -98,17 +100,42 @@ func load(getenv func(string) string) (*Config, error) {
 	}
 	defaultCertDir := filepath.Join(home, ".ai-firewall")
 
+	listenPort, err := envInt(getenv, "FIREWALL_PORT", 8080)
+	if err != nil {
+		return nil, err
+	}
+	vaultSizeLimit, err := envInt(getenv, "VAULT_SIZE_LIMIT", 1000)
+	if err != nil {
+		return nil, err
+	}
+	maskPaths, err := envBool(getenv, "MASK_PATHS", true)
+	if err != nil {
+		return nil, err
+	}
+	maskEmails, err := envBool(getenv, "MASK_EMAILS", true)
+	if err != nil {
+		return nil, err
+	}
+	mitmEnabled, err := envBool(getenv, "MITM_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+	mitmPort, err := envInt(getenv, "MITM_PORT", 8082)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
-		ListenPort:     envInt(getenv, "FIREWALL_PORT", 8080),
+		ListenPort:     listenPort,
 		UpstreamURL:    envStr(getenv, "UPSTREAM_URL", "https://api.anthropic.com"),
 		ProviderHint:   envStr(getenv, "PROVIDER_HINT", ""),
 		ForwardAPIKey:  envStr(getenv, "FORWARD_API_KEY", ""),
-		VaultSizeLimit: envInt(getenv, "VAULT_SIZE_LIMIT", 1000),
-		MaskPaths:      envBool(getenv, "MASK_PATHS", true),
-		MaskEmails:     envBool(getenv, "MASK_EMAILS", true),
+		VaultSizeLimit: vaultSizeLimit,
+		MaskPaths:      maskPaths,
+		MaskEmails:     maskEmails,
 		LogLevel:       envStr(getenv, "LOG_LEVEL", "info"),
-		MITMEnabled:    envBool(getenv, "MITM_ENABLED", false),
-		MITMPort:       envInt(getenv, "MITM_PORT", 8082),
+		MITMEnabled:    mitmEnabled,
+		MITMPort:       mitmPort,
 		MITMCertDir:    envStr(getenv, "MITM_CERT_DIR", defaultCertDir),
 	}
 
@@ -124,13 +151,22 @@ func load(getenv func(string) string) (*Config, error) {
 				"MITM_PORT must be between 1 and 65535, got: %d", cfg.MITMPort)
 		}
 	}
+	if cfg.VaultSizeLimit < 1 {
+		return nil, fmt.Errorf("VAULT_SIZE_LIMIT must be at least 1, got: %d", cfg.VaultSizeLimit)
+	}
+	if cfg.MITMEnabled && cfg.MITMPort == cfg.ListenPort {
+		return nil, fmt.Errorf("MITM_PORT must differ from FIREWALL_PORT when MITM is enabled")
+	}
 
 	if cfg.ForwardAPIKey == "" {
 		return nil, fmt.Errorf(
 			"FORWARD_API_KEY is required but not set; use \"none\" for passthrough mode")
 	}
 
-	cfg.UpstreamURL = strings.TrimRight(cfg.UpstreamURL, "/")
+	cfg.UpstreamURL, err = NormalizeUpstreamURL(cfg.UpstreamURL)
+	if err != nil {
+		return nil, fmt.Errorf("UPSTREAM_URL: %w", err)
+	}
 
 	// ProviderHint is optional; validate only when explicitly set.
 	// (ProviderHint isteğe bağlıdır; yalnızca açıkça ayarlandığında doğrula.)
@@ -159,7 +195,41 @@ func load(getenv func(string) string) (*Config, error) {
 		cfg.ProviderHint = strings.ToLower(cfg.ProviderHint)
 	}
 
+	switch cfg.LogLevel {
+	case "silent", "info", "debug":
+	default:
+		return nil, fmt.Errorf("LOG_LEVEL %q is invalid; use silent, info, or debug", cfg.LogLevel)
+	}
+
 	return cfg, nil
+}
+
+// NormalizeUpstreamURL validates the transport boundary used for provider
+// credentials. Remote upstreams must use HTTPS; plaintext HTTP is accepted
+// only for loopback development services.
+func NormalizeUpstreamURL(raw string) (string, error) {
+	normalized := strings.TrimRight(strings.TrimSpace(raw), "/")
+	u, err := url.Parse(normalized)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("must be an absolute HTTP(S) URL")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("must not contain userinfo, query parameters, or a fragment")
+	}
+	if u.Scheme != "https" {
+		if u.Scheme != "http" || !isLoopbackHostname(u.Hostname()) {
+			return "", fmt.Errorf("remote upstreams must use HTTPS")
+		}
+	}
+	return normalized, nil
+}
+
+func isLoopbackHostname(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // LoadForTest returns a Config suitable for unit tests without requiring
@@ -194,28 +264,32 @@ func envStrFrom(getenv func(string) string, key, fallback string) string {
 	return fallback
 }
 
-func envInt(getenv func(string) string, key string, fallback int) int {
+func envInt(getenv func(string) string, key string, fallback int) (int, error) {
 	return envIntFrom(getenv, key, fallback)
 }
 
-func envIntFrom(getenv func(string) string, key string, fallback int) int {
+func envIntFrom(getenv func(string) string, key string, fallback int) (int, error) {
 	if v := getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer", key)
 		}
+		return n, nil
 	}
-	return fallback
+	return fallback, nil
 }
 
-func envBool(getenv func(string) string, key string, fallback bool) bool {
+func envBool(getenv func(string) string, key string, fallback bool) (bool, error) {
 	return envBoolFrom(getenv, key, fallback)
 }
 
-func envBoolFrom(getenv func(string) string, key string, fallback bool) bool {
+func envBoolFrom(getenv func(string) string, key string, fallback bool) (bool, error) {
 	if v := getenv(key); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return false, fmt.Errorf("%s must be a boolean (true or false)", key)
 		}
+		return b, nil
 	}
-	return fallback
+	return fallback, nil
 }

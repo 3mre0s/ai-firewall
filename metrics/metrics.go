@@ -14,26 +14,43 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync/atomic"
 	"time"
 )
 
-// VaultStats is the subset of vault state needed by the metrics snapshot.
-// Defined here to avoid an import cycle between metrics ↔ vault.
-// (Döngüsel bağımlılığı önlemek için vault.Stats yerine bu minimal interface kullanılır.)
-type VaultStats struct {
-	Current   int   // current entry count (mevcut giriş sayısı)
-	Limit     int   // configured maximum (yapılandırılmış maksimum)
-	TotalHits int64 // cumulative unmask operations (kümülatif maske kaldırma sayısı)
+// VaultStatsProvider is any object that can report its current occupancy.
+// It intentionally uses primitive return values so the vault package does not
+// depend on metrics DTOs.
+type VaultStatsProvider interface {
+	MetricsSnapshot() (current int, limit int, totalHits int64)
 }
 
-// VaultStatsProvider is any object that can report its current occupancy.
-// vault.Vault satisfies this interface automatically.
-// (vault.Vault bu arayüzü otomatik olarak karşılar.)
-type VaultStatsProvider interface {
-	Stats() VaultStats
+// Recorder is the counter subset consumed by the security pipeline.
+type Recorder interface {
+	IncRequests()
+	IncStreamRequests()
+	IncMaskedItems(int64)
+	IncMaskedRequests()
+	IncUnmaskedItems(int64)
+	IncUpstreamErrors()
+	IncVaultEvictions()
+	IncBlockedRequests()
 }
+
+type nopRecorder struct{}
+
+func (nopRecorder) IncRequests()           {}
+func (nopRecorder) IncStreamRequests()     {}
+func (nopRecorder) IncMaskedItems(int64)   {}
+func (nopRecorder) IncMaskedRequests()     {}
+func (nopRecorder) IncUnmaskedItems(int64) {}
+func (nopRecorder) IncUpstreamErrors()     {}
+func (nopRecorder) IncVaultEvictions()     {}
+func (nopRecorder) IncBlockedRequests()    {}
+
+func NopRecorder() Recorder { return nopRecorder{} }
 
 // Counters holds all tracked (izlenen) metrics.
 // Fields are int64 so atomic operations work on 32-bit platforms.
@@ -76,9 +93,7 @@ type Counters struct {
 	startTime time.Time
 }
 
-// Global is the single shared Counters instance used by the proxy.
-// (Proxy tarafından kullanılan tek paylaşılan Counters örneği.)
-var Global = &Counters{startTime: time.Now()}
+func NewCounters() *Counters { return &Counters{startTime: time.Now()} }
 
 // ── Increment helpers (artırma yardımcıları) ──────────────────────────────────
 
@@ -148,14 +163,14 @@ func (c *Counters) Snapshot(vault VaultStatsProvider) snapshot {
 	// Attach vault occupancy if a provider was given.
 	// (Sağlayıcı verilmişse vault doluluk bilgisini ekle.)
 	if vault != nil {
-		vs := vault.Stats()
-		s.VaultCurrent = vs.Current
-		s.VaultLimit = vs.Limit
-		s.VaultHits = vs.TotalHits
+		current, limit, hits := vault.MetricsSnapshot()
+		s.VaultCurrent = current
+		s.VaultLimit = limit
+		s.VaultHits = hits
 
 		fillPct := 0.0
-		if vs.Limit > 0 {
-			fillPct = float64(vs.Current) / float64(vs.Limit) * 100
+		if limit > 0 {
+			fillPct = float64(current) / float64(limit) * 100
 		}
 		s.VaultFillPct = fmt.Sprintf("%.2f%%", fillPct)
 	}
@@ -186,7 +201,9 @@ func (c *Counters) Handler(vault VaultStatsProvider) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		enc.Encode(c.Snapshot(vault))
+		if err := enc.Encode(c.Snapshot(vault)); err != nil {
+			log.Printf("[metrics][error] response encoding failed: %v", err)
+		}
 	}
 }
 
@@ -195,7 +212,9 @@ func (c *Counters) Handler(vault VaultStatsProvider) http.HandlerFunc {
 func (c *Counters) HTMLHandler(vault VaultStatsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, dashboardHTML)
+		if _, err := fmt.Fprint(w, dashboardHTML); err != nil {
+			log.Printf("[metrics][error] dashboard response write failed: %v", err)
+		}
 	}
 }
 

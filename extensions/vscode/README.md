@@ -17,13 +17,18 @@ Run the firewall as a local sidecar from VS Code.
    - **macOS**: `~/Library/Application Support/local-ai-firewall/ai-firewall` (or `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`)
    - **Linux**: `~/.local/bin/ai-firewall` (or `/usr/local/bin`)
 
-   Anywhere on your `PATH` also works. To override, set `localAiFirewall.binaryPath`.
+   Anywhere on your `PATH` also works. To override, set
+   `localAiFirewall.binaryPath` in VS Code's **global user** settings; workspace
+   values are ignored.
 
 4. Run `Local AI Firewall: Set API Key`, then `Local AI Firewall: Start`.
 
 ## Development install
 
-1. Build the firewall from the repository root:
+1. Build the firewall from the repository root and set the resulting absolute
+   path in the **global user** `localAiFirewall.binaryPath` setting. Workspace
+   settings and repository-root binaries are intentionally ignored because the
+   selected process receives your provider credential:
 
    ```bash
    go build -o ai-firewall .
@@ -36,7 +41,7 @@ Run the firewall as a local sidecar from VS Code.
    - Run `Local AI Firewall: Set API Key`
    - `localAiFirewall.upstreamUrl`
    - `localAiFirewall.providerHint` when auto-detect is not enough
-   - `localAiFirewall.binaryPath` only if the binary is not in any of the standard locations
+   - `localAiFirewall.binaryPath` in global user settings only, and only if the binary is not in any of the standard locations
 
 ## Packaging the VSIX
 

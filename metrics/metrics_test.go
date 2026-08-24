@@ -14,11 +14,17 @@ type mockVaultStatsProvider struct {
 	totalHits int64
 }
 
-func (m *mockVaultStatsProvider) Stats() VaultStats {
-	return VaultStats{
-		Current:   m.current,
-		Limit:     m.limit,
-		TotalHits: m.totalHits,
+func (m *mockVaultStatsProvider) MetricsSnapshot() (int, int, int64) {
+	return m.current, m.limit, m.totalHits
+}
+
+func TestCountersAreIndependent(t *testing.T) {
+	t.Parallel()
+	first := NewCounters()
+	second := NewCounters()
+	first.IncRequests()
+	if got := second.Snapshot(nil).RequestsTotal; got != 0 {
+		t.Fatalf("second counter observed first counter state: %d", got)
 	}
 }
 

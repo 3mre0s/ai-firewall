@@ -7,6 +7,23 @@ import (
 	"runtime"
 )
 
+type commandRunner interface {
+	CombinedOutput(prog string, args ...string) ([]byte, error)
+	Run(prog string, args ...string) error
+}
+
+type execCommandRunner struct{}
+
+func (execCommandRunner) CombinedOutput(prog string, args ...string) ([]byte, error) {
+	return exec.Command(prog, args...).CombinedOutput()
+}
+
+func (execCommandRunner) Run(prog string, args ...string) error {
+	return exec.Command(prog, args...).Run()
+}
+
+var trustStoreCommands commandRunner = execCommandRunner{}
+
 // ════════════════════════════════════════════════════════════════════════════
 // CA Trust Store Installation (CA Güven Deposu Yüklemesi)
 // ════════════════════════════════════════════════════════════════════════════
@@ -25,7 +42,11 @@ import (
 //	Yükseltilmiş ayrıcalıklar gerektirir (macOS/Linux'ta sudo, Windows'ta Yönetici).
 //	İzin nedeniyle başarısız olursa elle talimatlar içeren açık bir hata döner.)
 func InstallCA(certPath string) error {
-	switch runtime.GOOS {
+	return installCAForOS(runtime.GOOS, certPath)
+}
+
+func installCAForOS(goos, certPath string) error {
+	switch goos {
 	case "darwin":
 		return installDarwin(certPath)
 	case "linux":
@@ -34,7 +55,7 @@ func InstallCA(certPath string) error {
 		return installWindows(certPath)
 	default:
 		return fmt.Errorf("unsupported OS for CA installation: %s\n"+
-			"Please manually install the CA certificate at: %s", runtime.GOOS, certPath)
+			"Please manually install the CA certificate at: %s", goos, certPath)
 	}
 }
 
@@ -45,7 +66,11 @@ func InstallCA(certPath string) error {
 //
 //	kontrol eder. Herhangi bir nedenle kontrol başarısız olursa false döner.)
 func CheckInstalled() bool {
-	switch runtime.GOOS {
+	return checkInstalledForOS(runtime.GOOS)
+}
+
+func checkInstalledForOS(goos string) bool {
+	switch goos {
 	case "darwin":
 		return checkDarwin()
 	case "linux":
@@ -69,13 +94,12 @@ func installDarwin(certPath string) error {
 	// -d: add to admin trust settings domain
 	// -r trustRoot: mark as a trusted root certificate
 	// -k: specify the target keychain
-	cmd := exec.Command("security", "add-trusted-cert",
+	output, err := trustStoreCommands.CombinedOutput("security", "add-trusted-cert",
 		"-d",
 		"-r", "trustRoot",
 		"-k", "/Library/Keychains/System.keychain",
 		certPath,
 	)
-	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("macOS CA installation failed: %v\n"+
 			"Output: %s\n"+
@@ -89,11 +113,11 @@ func installDarwin(certPath string) error {
 }
 
 func checkDarwin() bool {
-	cmd := exec.Command("security", "find-certificate",
+	err := trustStoreCommands.Run("security", "find-certificate",
 		"-c", caCommonName,
 		"/Library/Keychains/System.keychain",
 	)
-	return cmd.Run() == nil
+	return err == nil
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -112,8 +136,7 @@ func installLinux(certPath string) error {
 
 	// Step 1: Copy cert to the system CA certificates directory.
 	// (Adım 1: Sertifikayı sistem CA sertifikaları dizinine kopyala.)
-	cpCmd := exec.Command("cp", certPath, targetPath)
-	if output, err := cpCmd.CombinedOutput(); err != nil {
+	if output, err := trustStoreCommands.CombinedOutput("cp", certPath, targetPath); err != nil {
 		return fmt.Errorf("copying CA cert failed: %v\n"+
 			"Output: %s\n"+
 			"Run with sudo:\n"+
@@ -123,8 +146,7 @@ func installLinux(certPath string) error {
 
 	// Step 2: Update the system CA bundle to include the new cert.
 	// (Adım 2: Yeni sertifikayı dahil etmek için sistem CA paketini güncelle.)
-	updateCmd := exec.Command("update-ca-certificates")
-	if output, err := updateCmd.CombinedOutput(); err != nil {
+	if output, err := trustStoreCommands.CombinedOutput("update-ca-certificates"); err != nil {
 		return fmt.Errorf("update-ca-certificates failed: %v\n"+
 			"Output: %s\n"+
 			"Run with sudo:\n"+
@@ -140,8 +162,7 @@ func checkLinux() bool {
 	targetPath := linuxCertDir + "/" + linuxCertFile
 	// Use stat to check if the cert file exists in the system directory.
 	// exec.Command("test", "-f", ...) may not work in all environments.
-	cmd := exec.Command("stat", targetPath)
-	return cmd.Run() == nil
+	return trustStoreCommands.Run("stat", targetPath) == nil
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -154,13 +175,9 @@ func installWindows(certPath string) error {
 	// certutil -addstore adds a certificate to a specified certificate store.
 	// -f: force overwrite if already present
 	// "ROOT": the Trusted Root Certification Authorities store
-	cmd := exec.Command("certutil", "-addstore", "-f", "ROOT", certPath)
-	output, err := cmd.CombinedOutput()
+	output, err := trustStoreCommands.CombinedOutput("certutil", "-addstore", "-f", "ROOT", certPath)
 	if err != nil {
-		return fmt.Errorf("Windows CA installation failed: %v\n"+
-			"Output: %s\n"+
-			"Run as Administrator:\n"+
-			"  certutil -addstore -f ROOT %s",
+		return fmt.Errorf("windows CA installation failed: %v; output: %s; run as Administrator: certutil -addstore -f ROOT %s",
 			err, output, certPath)
 	}
 
@@ -170,8 +187,7 @@ func installWindows(certPath string) error {
 
 func checkWindows() bool {
 	// certutil -verifystore checks if a certificate exists in the specified store.
-	cmd := exec.Command("certutil", "-verifystore", "ROOT", caCommonName)
-	return cmd.Run() == nil
+	return trustStoreCommands.Run("certutil", "-verifystore", "ROOT", caCommonName) == nil
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -202,7 +218,11 @@ type osCmd struct {
 // sudo, Windows'ta Yönetici). İzin nedeniyle başarısız olursa elle talimatlar
 // içeren açık bir hata döner.)
 func UninstallCA(certPath string) error {
-	switch runtime.GOOS {
+	return uninstallCAForOS(runtime.GOOS, certPath)
+}
+
+func uninstallCAForOS(goos, certPath string) error {
+	switch goos {
 	case "darwin":
 		return uninstallDarwin(certPath)
 	case "linux":
@@ -210,9 +230,8 @@ func UninstallCA(certPath string) error {
 	case "windows":
 		return uninstallWindows(certPath)
 	default:
-		return fmt.Errorf("unsupported OS for CA removal: %s\n"+
-			"Please manually remove the certificate with CN=%q from your system trust store.",
-			runtime.GOOS, caCommonName)
+		return fmt.Errorf("unsupported OS for CA removal: %s; manually remove the certificate with CN=%q from your system trust store",
+			goos, caCommonName)
 	}
 }
 
@@ -242,7 +261,7 @@ func uninstallDarwin(_ string) error {
 	log.Printf("[mitm][info] removing CA from macOS System Keychain...")
 
 	for _, s := range darwinUninstallCmds() {
-		output, err := exec.Command(s.prog, s.args...).CombinedOutput()
+		output, err := trustStoreCommands.CombinedOutput(s.prog, s.args...)
 		if err != nil {
 			return fmt.Errorf("macOS CA removal failed: %v\n"+
 				"Output: %s\n"+
@@ -275,8 +294,7 @@ func uninstallLinux(_ string) error {
 
 	targetPath := linuxCertDir + "/" + linuxCertFile
 
-	rmCmd := exec.Command("rm", "-f", targetPath)
-	if output, err := rmCmd.CombinedOutput(); err != nil {
+	if output, err := trustStoreCommands.CombinedOutput("rm", "-f", targetPath); err != nil {
 		return fmt.Errorf("removing CA cert failed: %v\n"+
 			"Output: %s\n"+
 			"Run with sudo:\n"+
@@ -284,8 +302,7 @@ func uninstallLinux(_ string) error {
 			err, output, targetPath)
 	}
 
-	updateCmd := exec.Command("update-ca-certificates")
-	if output, err := updateCmd.CombinedOutput(); err != nil {
+	if output, err := trustStoreCommands.CombinedOutput("update-ca-certificates"); err != nil {
 		return fmt.Errorf("update-ca-certificates failed after removal: %v\n"+
 			"Output: %s\n"+
 			"Run with sudo:\n"+
@@ -313,12 +330,9 @@ func uninstallWindows(_ string) error {
 	log.Printf("[mitm][info] removing CA from Windows trust store...")
 
 	for _, s := range windowsUninstallCmds() {
-		output, err := exec.Command(s.prog, s.args...).CombinedOutput()
+		output, err := trustStoreCommands.CombinedOutput(s.prog, s.args...)
 		if err != nil {
-			return fmt.Errorf("Windows CA removal failed: %v\n"+
-				"Output: %s\n"+
-				"Run as Administrator:\n"+
-				"  certutil -delstore ROOT %q",
+			return fmt.Errorf("windows CA removal failed: %v; output: %s; run as Administrator: certutil -delstore ROOT %q",
 				err, output, caCommonName)
 		}
 	}

@@ -2,6 +2,9 @@ package mitm
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,6 +42,10 @@ func TestCAKeyRoundTripWithPassphrase(t *testing.T) {
 	}
 	if !bytes.Contains(keyRaw, []byte("BEGIN ENCRYPTED EC PRIVATE KEY")) {
 		t.Errorf("key file does not contain an encrypted PEM block; got:\n%s", keyRaw)
+	}
+	block, _ := pem.Decode(keyRaw)
+	if block == nil || block.Headers["KDF"] != "pbkdf2-sha256-v1" || block.Headers["Salt"] == "" {
+		t.Fatalf("encrypted key is missing versioned salted KDF metadata: %#v", block)
 	}
 
 	// Load back using the same passphrase.
@@ -150,5 +157,43 @@ func TestCAKeyEncryptedRequiresPassphrase(t *testing.T) {
 	_, err := loadCA(certPath, keyPath)
 	if err == nil {
 		t.Error("expected error when passphrase env var is unset for an encrypted key, got nil")
+	}
+}
+
+func TestDeriveCAKeyPBKDF2KnownVector(t *testing.T) {
+	got := deriveCAKeyPBKDF2([]byte("password"), []byte("salt"), 1, 32)
+	want := "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+	if hex.EncodeToString(got) != want {
+		t.Fatalf("PBKDF2 vector = %x, want %s", got, want)
+	}
+}
+
+func TestLeafCertificateIsCachedAndValidForHost(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AI_FIREWALL_CA_PASSPHRASE", "")
+	ca, err := LoadOrCreateCA(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "ca.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := ca.LeafCert("api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ca.LeafCert("api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("leaf certificate cache returned a different pointer")
+	}
+	cert, err := x509.ParseCertificate(first.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cert.VerifyHostname("api.openai.com"); err != nil {
+		t.Fatal(err)
+	}
+	if cert.Issuer.CommonName != caCommonName {
+		t.Fatalf("leaf issuer = %q", cert.Issuer.CommonName)
 	}
 }

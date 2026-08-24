@@ -70,7 +70,8 @@
         "localAiFirewall.binaryPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the ai-firewall binary. Defaults to ./ai-firewall or ./ai-firewall.exe in the workspace."
+          "scope": "application",
+          "description": "Absolute path to a trusted ai-firewall binary. Set this in global user settings; workspace values and workspace-root binaries are ignored."
         },
         "localAiFirewall.forwardApiKey": {
           "type": "string",
@@ -133,10 +134,11 @@
     }
   },
   "scripts": {
+    "test": "node --test test/*.test.js",
     "package": "vsce package --out local-ai-firewall.vsix",
     "package:beta": "vsce package --pre-release --out local-ai-firewall.vsix"
   },
   "devDependencies": {
-    "@vscode/vsce": "^2.32.0"
+    "@vscode/vsce": "^3.9.2"
   }
 }

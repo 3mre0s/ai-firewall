@@ -28,6 +28,7 @@ type testSetup struct {
 	vault    *vault.Vault
 	masker   *masker.Masker
 	server   *Server
+	metrics  *metrics.Counters
 }
 
 // newTestSetup creates a complete test environment with firewall and mock upstream.
@@ -48,10 +49,11 @@ func newTestSetup(t *testing.T, vaultLimit int, upstreamHandler http.HandlerFunc
 		MaskEmails:     true,
 		VaultSizeLimit: vaultLimit,
 	}
-	m := masker.New(v, cfg)
+	counters := metrics.NewCounters()
+	m := masker.New(v, cfg, counters)
 
 	// Create firewall server
-	srv := NewServer(cfg, m)
+	srv := NewServerWithMetrics(cfg, m, nil, counters)
 	firewall := httptest.NewServer(srv)
 
 	return &testSetup{
@@ -60,6 +62,7 @@ func newTestSetup(t *testing.T, vaultLimit int, upstreamHandler http.HandlerFunc
 		vault:    v,
 		masker:   m,
 		server:   srv,
+		metrics:  counters,
 	}
 }
 
@@ -96,7 +99,9 @@ func TestEmailMaskingRoundTrip(t *testing.T) {
 				}},
 			},
 		}
-		json.NewEncoder(w).Encode(response)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
 	}
 
 	ts := newTestSetup(t, 1000, upstreamHandler)
@@ -121,7 +126,7 @@ func TestEmailMaskingRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	responseBody, _ := io.ReadAll(resp.Body)
 	responseStr := string(responseBody)
@@ -148,7 +153,7 @@ func TestEmailMaskingRoundTrip(t *testing.T) {
 	}
 
 	// 5. Metrics should reflect masking
-	snapshot := metrics.Global.Snapshot(ts.vault)
+	snapshot := ts.metrics.Snapshot(ts.vault)
 	if snapshot.MaskedItems == 0 {
 		t.Error("FAIL: MaskedItems metric is 0, expected at least 1")
 	}
@@ -170,7 +175,7 @@ func TestGitHubPATBlocking_VaultFull(t *testing.T) {
 	upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalled = true
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}
 
 	// Create firewall with a one-entry request vault.
@@ -196,7 +201,7 @@ func TestGitHubPATBlocking_VaultFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// ASSERTIONS:
 	// 1. Response should be 507 Insufficient Storage (vault full)
@@ -216,7 +221,7 @@ func TestGitHubPATBlocking_VaultFull(t *testing.T) {
 	}
 
 	// 4. Metrics should show vault evictions and blocked requests
-	snapshot := metrics.Global.Snapshot(ts.vault)
+	snapshot := ts.metrics.Snapshot(ts.vault)
 	if snapshot.VaultEvictions == 0 {
 		t.Error("FAIL: VaultEvictions metric should be > 0")
 	}
@@ -253,7 +258,7 @@ func TestSafeSSEStreaming(t *testing.T) {
 		}
 
 		for _, chunk := range chunks {
-			w.Write([]byte(chunk))
+			_, _ = w.Write([]byte(chunk))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -277,7 +282,7 @@ func TestSafeSSEStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// ASSERTIONS:
 	// 1. Response should be 200 OK
@@ -302,7 +307,7 @@ func TestSafeSSEStreaming(t *testing.T) {
 	}
 
 	// 4. Metrics should show stream request
-	snapshot := metrics.Global.Snapshot(ts.vault)
+	snapshot := ts.metrics.Snapshot(ts.vault)
 	if snapshot.StreamRequests == 0 {
 		t.Error("FAIL: StreamRequests metric should be > 0")
 	}
@@ -336,7 +341,7 @@ func TestSSEStreamLeakDetection(t *testing.T) {
 
 		for i, chunk := range chunks {
 			chunksSent = i + 1
-			w.Write([]byte(chunk))
+			_, _ = w.Write([]byte(chunk))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -360,7 +365,7 @@ func TestSSEStreamLeakDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response
 	responseBody, _ := io.ReadAll(resp.Body)
@@ -393,14 +398,14 @@ func TestMetricsIncrement(t *testing.T) {
 
 	upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}
 
 	ts := newTestSetup(t, 1000, upstreamHandler)
 	defer ts.Close()
 
 	// Capture initial metrics
-	initialSnapshot := metrics.Global.Snapshot(ts.vault)
+	initialSnapshot := ts.metrics.Snapshot(ts.vault)
 
 	// Send request with sensitive data
 	requestBody := map[string]interface{}{
@@ -412,10 +417,10 @@ func TestMetricsIncrement(t *testing.T) {
 
 	bodyBytes, _ := json.Marshal(requestBody)
 	resp, _ := http.Post(ts.firewall.URL+"/v1/chat/completions", "application/json", bytes.NewReader(bodyBytes))
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Capture final metrics
-	finalSnapshot := metrics.Global.Snapshot(ts.vault)
+	finalSnapshot := ts.metrics.Snapshot(ts.vault)
 
 	// ASSERTIONS: Verify metrics incremented
 	if finalSnapshot.RequestsTotal <= initialSnapshot.RequestsTotal {
@@ -436,7 +441,7 @@ func TestVaultStateAfterMasking(t *testing.T) {
 
 	upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}
 
 	ts := newTestSetup(t, 10, upstreamHandler)
@@ -455,7 +460,7 @@ func TestVaultStateAfterMasking(t *testing.T) {
 
 		bodyBytes, _ := json.Marshal(requestBody)
 		resp, _ := http.Post(ts.firewall.URL+"/v1/chat/completions", "application/json", bytes.NewReader(bodyBytes))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	// ASSERTIONS: completed request scopes do not retain secrets globally.
@@ -557,7 +562,7 @@ func TestPatternMasking_TableDriven(t *testing.T) {
 				}
 
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"status":"ok"}`))
+				_, _ = w.Write([]byte(`{"status":"ok"}`))
 			}
 
 			ts := newTestSetup(t, 1000, upstreamHandler)
@@ -575,7 +580,7 @@ func TestPatternMasking_TableDriven(t *testing.T) {
 			if err != nil {
 				t.Fatalf("request failed: %v", err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 
 			if stats := ts.vault.Stats(); stats.Current != 0 {
 				t.Errorf("process-wide vault retained %d item(s)", stats.Current)
@@ -649,7 +654,7 @@ func TestConcurrentRequests_ThreadSafety(t *testing.T) {
 
 	upstreamHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}
 
 	ts := newTestSetup(t, 1000, upstreamHandler)
@@ -673,7 +678,7 @@ func TestConcurrentRequests_ThreadSafety(t *testing.T) {
 			if err != nil {
 				t.Errorf("Request %d failed: %v", idx, err)
 			} else {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			done <- true
 		}(i)
@@ -691,7 +696,7 @@ func TestConcurrentRequests_ThreadSafety(t *testing.T) {
 	}
 
 	// Verify metrics are consistent
-	snapshot := metrics.Global.Snapshot(ts.vault)
+	snapshot := ts.metrics.Snapshot(ts.vault)
 	if snapshot.RequestsTotal < int64(numRequests) {
 		t.Errorf("FAIL: RequestsTotal (%d) less than expected (%d)", snapshot.RequestsTotal, numRequests)
 	}
@@ -720,12 +725,12 @@ func TestRequestScopesDoNotUnmaskPriorLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Body.Close()
+	_ = first.Body.Close()
 	second, err := http.Post(ts.firewall.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"prompt":"safe"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Body.Close()
+	defer func() { _ = second.Body.Close() }()
 	body, _ := io.ReadAll(second.Body)
 
 	if strings.Contains(string(body), secret) {
@@ -750,7 +755,7 @@ func TestCompressedRequestIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnsupportedMediaType {
 		t.Fatalf("status = %d, want 415", resp.StatusCode)
 	}
@@ -770,7 +775,7 @@ func TestCompressedUpstreamResponseIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", resp.StatusCode)
 	}
@@ -794,7 +799,7 @@ func TestHealthEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("health check failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// ASSERTIONS
 	if resp.StatusCode != http.StatusOK {
@@ -820,7 +825,9 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 
 		// Parse the request
 		var req map[string]interface{}
-		json.Unmarshal(body, &req)
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+		}
 
 		// Extract the content (which should be masked)
 		messages := req["messages"].([]interface{})
@@ -840,7 +847,9 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
 	}
 
 	ts := newTestSetup(t, 1000, upstreamHandler)
@@ -861,12 +870,14 @@ func TestRoundTrip_MultiplePatterns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	responseBody, _ := io.ReadAll(resp.Body)
 
 	var response map[string]interface{}
-	json.Unmarshal(responseBody, &response)
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 
 	// Extract the unmasked content from response
 	if choices, ok := response["choices"].([]interface{}); ok && len(choices) > 0 {

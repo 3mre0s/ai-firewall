@@ -1,6 +1,6 @@
-# Contributing to Local AI Firewall
+# Contributing to Anonmyz
 
-Thanks for helping improve Local AI Firewall. Security-sensitive changes need small, reviewable patches and tests that demonstrate the intended boundary.
+Thanks for helping improve Anonmyz. Security-sensitive changes need small, reviewable patches and tests that demonstrate the intended boundary.
 
 ## Local setup
 
@@ -42,6 +42,7 @@ gofmt -w .
 go vet ./...
 go test ./... -race -count=1
 go build ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 ```
 
 For VS Code extension changes:
@@ -49,8 +50,12 @@ For VS Code extension changes:
 ```bash
 cd extensions/vscode
 npm ci
+npm test
+npm audit --audit-level=high
 npm run package
 ```
+
+Performance-sensitive masking and stream changes should also run `make benchmark`. Include before/after `ns/op` and `B/op` figures in the pull request without using real credentials.
 
 ## Pull requests
 

@@ -71,6 +71,10 @@ checksum:
   extra_files:
     - glob: dist/local-ai-firewall.vsix
 
+sboms:
+  - id: release-archives
+    artifacts: archive
+
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 

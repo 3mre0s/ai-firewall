@@ -5,6 +5,7 @@ package audit
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -83,9 +84,11 @@ func (s *Store) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(struct {
+		if err := json.NewEncoder(w).Encode(struct {
 			Retention int     `json:"retention_limit"`
 			Traces    []Trace `json:"traces"`
-		}{Retention: s.limit, Traces: s.List()})
+		}{Retention: s.limit, Traces: s.List()}); err != nil {
+			log.Printf("[audit][error] response encoding failed: %v", err)
+		}
 	}
 }

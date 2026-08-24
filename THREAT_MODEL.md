@@ -28,6 +28,9 @@ patterns, the provider receives placeholders instead of the original values.
   lives only in memory, is never persisted, and is wiped after its response.
 - **The firewall's own API key leaking.** In explicit proxy mode,
   `FORWARD_API_KEY` is injected upstream and is never logged or written to disk.
+- **Accidental plaintext transport to a remote upstream.** Remote upstream URLs
+  must use HTTPS. Plain HTTP is accepted only for `localhost` and loopback IPs;
+  URL userinfo, query parameters, and fragments are rejected.
 - **Internal state leaking to the network.** The `/metrics` and `/dashboard`
   endpoints are bound to loopback (`127.0.0.1`, `::1`). Any non-loopback request
   receives `403 Forbidden`, so vault occupancy and mask counts cannot leak to
@@ -89,21 +92,25 @@ Implications you should understand:
 These are acknowledged design trade-offs, not vulnerabilities. They are tracked
 as roadmap work.
 
-- **CA key derivation uses a single SHA-256 hash, not a password-based KDF.**
-  When `AI_FIREWALL_CA_PASSPHRASE` is set, the AES-256-GCM key is derived from
-  the passphrase with one SHA-256 pass rather than scrypt or Argon2id. If the
-  encrypted key file is exfiltrated, this offers limited resistance to offline
-  dictionary attacks. Mitigating factors: the file is `0600`, the passphrase is
-  never written to disk, and leaf certificates are valid for only 24 hours.
-  **Roadmap:** move to Argon2id.
+- **Passphrase strength still matters.** New encrypted CA keys use a random
+  16-byte salt and PBKDF2-HMAC-SHA-256 with 210,000 iterations before
+  AES-256-GCM encryption. Versioned KDF metadata is stored in the PEM headers.
+  Legacy files derived with a single SHA-256 pass remain readable for upgrade
+  compatibility, so installations with legacy keys should rotate them. A weak
+  passphrase can still be attacked offline if `ca.key` is exfiltrated.
 - **No passphrase means the CA key is stored unencrypted.** If
   `AI_FIREWALL_CA_PASSPHRASE` is unset, the key is written as a plain `0600` PEM
   file and a prominent warning is logged. The cert directory gets an automatic
   `.gitignore` to prevent accidental commits, but you should set a passphrase.
-- **Secrets split across SSE chunk boundaries may pass through unmasked.** In
-  streaming responses each chunk is processed as it arrives. A secret whose
-  bytes are split across two chunks may not be detected on the **response** path.
-  Request bodies are always processed on a complete buffer and are unaffected.
+- **Streaming output cannot recall bytes already delivered.** A bounded 64 KiB
+  raw look-behind detects supported credential patterns split across network
+  reads and suppresses the output that completes a match. Earlier bytes may
+  already have been flushed before a later malicious value is recognizable;
+  terminating the stream cannot recall those bytes. Request bodies are always
+  processed on a complete buffer and are unaffected.
+- **Non-streaming responses are bounded, not streamed.** Explicit-proxy and MITM
+  paths buffer standard responses for leak inspection and cap them at 64 MiB.
+  Oversized bodies are suppressed rather than restored or forwarded.
 - **Detection is best-effort and format-specific.** Patterns are tuned to real
   secret formats to limit false positives, which means a malformed or
   truncated-looking secret may not match. Test with realistic values.

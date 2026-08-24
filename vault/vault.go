@@ -15,9 +15,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/3mre0s/ai-firewall/metrics"
 )
+
+type Stats struct {
+	Current   int
+	Limit     int
+	TotalHits int64
+}
 
 // Entry is a single record inside the Vault.
 // (Vault içindeki tek bir kayıt.)
@@ -111,6 +115,12 @@ func (v *Vault) ContainsOriginal(text string) bool {
 	return false
 }
 
+func (v *Vault) HasEntries() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return len(v.entries) > 0
+}
+
 // Reset wipes all entries, freeing memory.
 // Call this at the end of a session or when context changes.
 // (Tüm girişleri siler, belleği serbest bırakır.
@@ -127,11 +137,11 @@ func (v *Vault) Reset() {
 // (İzleme/loglama için mevcut kullanımın anlık görüntüsünü döner.
 //
 //	metrics.VaultStatsProvider arayüzünü karşılar.)
-func (v *Vault) Stats() metrics.VaultStats {
+func (v *Vault) Stats() Stats {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 
-	s := metrics.VaultStats{
+	s := Stats{
 		Current: len(v.entries),
 		Limit:   v.limit,
 	}
@@ -139,4 +149,11 @@ func (v *Vault) Stats() metrics.VaultStats {
 		s.TotalHits += atomic.LoadInt64(&e.hitCount)
 	}
 	return s
+}
+
+// MetricsSnapshot satisfies metrics.VaultStatsProvider without coupling this
+// storage package to the metrics package or its DTOs.
+func (v *Vault) MetricsSnapshot() (current int, limit int, totalHits int64) {
+	s := v.Stats()
+	return s.Current, s.Limit, s.TotalHits
 }

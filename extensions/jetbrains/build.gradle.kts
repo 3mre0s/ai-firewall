@@ -7,6 +7,10 @@ plugins {
 group = "com.localai.firewall"
 version = "0.1.0"
 
+repositories {
+    mavenCentral()
+}
+
 dependencies {
     testImplementation(kotlin("test-junit5"))
 }

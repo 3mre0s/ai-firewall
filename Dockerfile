@@ -1,5 +1,5 @@
 # ── Build Stage ──────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=linux \
 # Distroless-style minimal image: only ca-certificates and tzdata added.
 # Final image is typically ~15 MB.
 # (Minimal üretim imajı: yalnızca ca-certificates ve tzdata eklendi. ~15 MB.)
-FROM alpine:3.19
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 RUN apk --no-cache add ca-certificates tzdata
 

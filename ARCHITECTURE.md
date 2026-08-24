@@ -51,7 +51,7 @@ sequenceDiagram
 
 ## Package Structure & Responsibilities
 
-The main request pipeline is organized into seven focused packages, with `audit/` and `mitm/` providing the local privacy trace and optional TLS interception path:
+The request pipeline is organized into focused packages, with a transport-independent DLP core shared by the explicit and MITM proxy paths:
 
 ```
 github.com/3mre0s/ai-firewall/
@@ -60,14 +60,16 @@ github.com/3mre0s/ai-firewall/
 ├── vault/              - In-memory thread-safe key-value vault.
 ├── patterns/           - Regular expressions registry grouped by sensitivity categories.
 ├── masker/             - Replaces secrets with vault placeholders and vice-versa.
+├── dlp/                - Request-scoped prepare/restore/stream fail-closed engine.
 ├── providers/          - Protocol adapters mapping upstream endpoints to headers/rules.
-├── proxy/              - Reverse proxy server implementation, streaming buffer, handler.
-├── metrics/            - Lock-free global counters and metrics HTTP handler.
-└── mitm/               - Optional allow-listed CONNECT/TLS interception.
+├── proxy/              - Explicit reverse-proxy transport and header policy.
+├── metrics/            - Injected lock-free counters and metrics HTTP handler.
+├── securitylog/        - Request-correlated JSON security event logging.
+└── mitm/               - Optional allow-listed CONNECT/TLS transport.
 ```
 
 ### 1. `config` (Yapılandırma)
-Responsible for reading environment variables (`FIREWALL_PORT`, `UPSTREAM_URL`, etc.). It contains a helper `LoadForTest()` which allows unit tests to spin up configurations without requiring system environment setup.
+Responsible for reading environment variables (`FIREWALL_PORT`, `UPSTREAM_URL`, etc.). `NormalizeUpstreamURL` enforces HTTPS for remote targets, permits HTTP only for loopback development services, and rejects URL userinfo, query parameters, and fragments. `LoadForTest()` lets unit tests create configurations without system environment setup.
 
 ### 2. `vault` (Kasa)
 A thread-safe `sync.RWMutex`-guarded storage engine. The proxy creates one vault per request/response exchange and wipes it when the response completes. This prevents placeholders observed in one request from restoring secrets belonging to another request.
@@ -81,11 +83,11 @@ Contains the main `Mask()` and `Unmask()` algorithms. It evaluates active patter
 ### 5. `providers` (Sağlayıcı Adaptörleri)
 Maps different upstream AI APIs to their protocol requirements. This package exposes a `Registry` of stateless providers. Custom headers are handled via `PrepareHeaders()`, and streaming formats via `IsStream()`.
 
-### 6. `proxy` (Ters Proxy ve Akış İşleyici)
-Implements `http.Handler` to run the proxy pipeline. It manages connection timeouts, forwards client headers allowed by safety list, and implements the `streamProcessor` which prevents breaking vault labels split across SSE chunk boundaries.
+### 6. `dlp` and `proxy` (Ortak DLP ve HTTP taşıma)
+`dlp.Engine` owns request-scoped masking, vault-full fail-close, bounded standard-response restoration, and `StreamProcessor`. Both explicit proxy and MITM use this implementation. `proxy` is responsible for HTTP transport, provider authentication, framing, and header allow-list policy.
 
-### 7. `metrics` (Metrikler ve Gözlemlenebilirlik)
-Implements atomic lock-free monitoring. Uses `sync/atomic` counters (`int64`) for fast performance under concurrent loads, exposing snapshot outputs via JSON under the `/metrics` path.
+### 7. `metrics` and `securitylog` (Gözlemlenebilirlik)
+Each server receives its own atomic `metrics.Recorder`; no mutable global counter is used by production paths. `securitylog` emits privacy-safe JSON events with a request ID shared by request, upstream, restoration, and blocking events.
 
 ---
 
@@ -107,4 +109,5 @@ If we try to unmask Chunk 1 immediately, the label `[[WIN_PATH_DEADC0DE]]` is tr
    - Everything *before* `[[` is safe to unmask and flush to the client immediately.
    - Everything *after* `[[` (the forming label) is retained in the buffer.
 4. When Chunk 2 arrives, it is appended to the buffer, completing the label bracket `]]`. The entire string is now safe to flush.
-5. On EOF, `Flush()` unconditionally unmasks and clears the remaining buffer.
+5. Before each safe segment is unmasked, it is combined with a bounded 64 KiB raw look-behind and scanned for original values and supported credential formats. A match marks the stream as blocked and suppresses the completing output.
+6. On EOF, `Flush()` performs the same inspection, then unmasks and clears the remaining buffer only when it is safe.

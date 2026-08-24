@@ -55,7 +55,7 @@ body:
       label: Reproduction
       description: Smallest steps that reproduce the issue. Redact any real key or PII.
       placeholder: |
-        1. ai-firewall starts on :8080
+        1. anonmyz starts on :8080
         2. curl -X POST http://localhost:8080/v1/messages -d '{ ... }'
         3. firewall returns 502, upstream log shows "missing x-api-key"
     validations:

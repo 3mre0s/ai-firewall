@@ -1,4 +1,4 @@
-.PHONY: build test vet clean docker run release
+.PHONY: build test vet vuln benchmark clean docker run release
 
 VERSION       ?= dev
 BINARY        := anonmyz
@@ -15,6 +15,12 @@ test:
 
 vet:
 	go vet ./...
+
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+benchmark:
+	go test ./masker ./dlp -run '^$$' -bench 'Benchmark(Mask|StreamProcessor)' -benchmem -count=1
 
 clean:
 	rm -f $(BINARY) $(BINARY).exe

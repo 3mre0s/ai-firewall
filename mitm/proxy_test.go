@@ -1,9 +1,17 @@
 package mitm
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +19,18 @@ import (
 	"github.com/3mre0s/ai-firewall/masker"
 	"github.com/3mre0s/ai-firewall/vault"
 )
+
+type pipeHijackWriter struct {
+	header http.Header
+	conn   net.Conn
+}
+
+func (w *pipeHijackWriter) Header() http.Header         { return w.header }
+func (w *pipeHijackWriter) WriteHeader(int)             {}
+func (w *pipeHijackWriter) Write(p []byte) (int, error) { return w.conn.Write(p) }
+func (w *pipeHijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
+}
 
 // TestIsAIHostExact verifies that isAIHost intercepts only whitelisted providers
 // and rejects hosts that merely contain provider keywords in their name.
@@ -119,6 +139,16 @@ func TestReadMITMBodyDetectsOversize(t *testing.T) {
 	}
 }
 
+func TestWriteMITMErrorProducesFramedResponse(t *testing.T) {
+	var output bytes.Buffer
+	writeMITMError(&output, http.StatusBadGateway, "unsafe upstream")
+	if !strings.Contains(output.String(), "HTTP/1.1 502 Bad Gateway") ||
+		!strings.Contains(output.String(), "Content-Length: 16") ||
+		!strings.HasSuffix(output.String(), "unsafe upstream\n") {
+		t.Fatalf("malformed MITM error response: %q", output.String())
+	}
+}
+
 func TestUnmaskStandardResponseFailsClosed(t *testing.T) {
 	cfg := config.LoadForTest()
 	requestMasker := masker.New(vault.New(cfg.VaultSizeLimit), cfg)
@@ -147,3 +177,229 @@ func TestUnmaskStandardResponseFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestKeepAliveRequestsUseIsolatedExchanges(t *testing.T) {
+	var firstMasked string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if firstMasked == "" {
+			firstMasked = string(body)
+			_, _ = w.Write(body)
+			return
+		}
+		_, _ = w.Write([]byte(firstMasked))
+	}))
+	defer upstream.Close()
+
+	cfg := config.LoadForTest()
+	m := masker.New(vault.New(cfg.VaultSizeLimit), cfg)
+	p := NewMITMProxy(nil, m, cfg)
+	p.httpClient = upstream.Client()
+	authority := strings.TrimPrefix(upstream.URL, "https://")
+
+	clientRaw, serverRaw := net.Pipe()
+	defer func() { _ = clientRaw.Close() }()
+	defer func() { _ = serverRaw.Close() }()
+	serverTLS := tls.Server(serverRaw, upstream.TLS.Clone())
+	clientTLS := tls.Client(clientRaw, &tls.Config{InsecureSkipVerify: true}) // test-only in-memory peer
+
+	serverDone := make(chan error, 1)
+	go func() {
+		if err := serverTLS.Handshake(); err != nil {
+			serverDone <- err
+			return
+		}
+		reader := bufio.NewReader(serverTLS)
+		if !p.handleMITMRequest(serverTLS, reader, authority) {
+			serverDone <- fmt.Errorf("first request unexpectedly closed keep-alive connection")
+			return
+		}
+		if p.handleMITMRequest(serverTLS, reader, authority) {
+			serverDone <- fmt.Errorf("second request unexpectedly kept connection alive")
+			return
+		}
+		serverDone <- nil
+	}()
+
+	if err := clientTLS.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	secret := "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+	firstBody := `{"value":"` + secret + `"}`
+	if _, err := fmt.Fprintf(clientTLS, "POST /first HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n\r\n%s", authority, len(firstBody), firstBody); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(clientTLS)
+	firstResp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstOutput, _ := io.ReadAll(firstResp.Body)
+	_ = firstResp.Body.Close()
+	if !bytes.Contains(firstOutput, []byte(secret)) {
+		t.Fatalf("first response did not restore its own secret: %q", firstOutput)
+	}
+
+	secondBody := `{"value":"safe"}`
+	if _, err := fmt.Fprintf(clientTLS, "POST /second HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", authority, len(secondBody), secondBody); err != nil {
+		t.Fatal(err)
+	}
+	secondResp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondOutput, _ := io.ReadAll(secondResp.Body)
+	_ = secondResp.Body.Close()
+	if bytes.Contains(secondOutput, []byte(secret)) {
+		t.Fatalf("first request secret restored in second request: %q", secondOutput)
+	}
+	if !bytes.Contains(secondOutput, []byte("[[GH_PAT_")) {
+		t.Fatalf("unknown prior placeholder should remain inert: %q", secondOutput)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeHTTPConnectPerformsTLSInterception(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AI_FIREWALL_CA_PASSPHRASE", "")
+	ca, err := LoadOrCreateCA(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "ca.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer upstream.Close()
+
+	cfg := config.LoadForTest()
+	m := masker.New(vault.New(cfg.VaultSizeLimit), cfg)
+	p := NewMITMProxy(ca, m, cfg)
+	transport := upstream.Client().Transport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, upstream.Listener.Addr().String())
+	}
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // test-only redirected upstream
+	p.httpClient = &http.Client{Transport: transport}
+
+	clientRaw, serverRaw := net.Pipe()
+	writer := &pipeHijackWriter{header: make(http.Header), conn: serverRaw}
+	req := httptest.NewRequest(http.MethodConnect, "http://api.openai.com:443", nil)
+	req.Host = "api.openai.com:443"
+	done := make(chan struct{})
+	go func() {
+		p.ServeHTTP(writer, req)
+		close(done)
+	}()
+
+	reader := bufio.NewReader(clientRaw)
+	line, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(line, "200 Connection Established") {
+		t.Fatalf("CONNECT response = %q, %v", line, err)
+	}
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca.CertPEM()) {
+		t.Fatal("failed to trust generated CA")
+	}
+	clientTLS := tls.Client(&bufferedConn{Conn: clientRaw, reader: reader}, &tls.Config{
+		RootCAs: pool, ServerName: "api.openai.com", MinVersion: tls.VersionTLS12,
+	})
+	if err := clientTLS.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	secret := "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+	body := `{"value":"` + secret + `"}`
+	if _, err := fmt.Fprintf(clientTLS, "POST /v1/responses HTTP/1.1\r\nHost: api.openai.com\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(clientTLS), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(responseBody, []byte(secret)) {
+		t.Fatalf("intercepted response status=%d body=%q", resp.StatusCode, responseBody)
+	}
+	if resp.Header.Get("X-Anonmyz-Request-Id") == "" {
+		t.Fatal("MITM response missing request ID")
+	}
+	_ = clientTLS.Close()
+	<-done
+}
+
+func TestMITMStreamingResponseUsesSharedDLPProcessor(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		midpoint := len(body) / 2
+		_, _ = w.Write(append([]byte("data: "), body[:midpoint]...))
+		flusher.Flush()
+		_, _ = w.Write(append(body[midpoint:], []byte("\n\n")...))
+		flusher.Flush()
+	}))
+	defer upstream.Close()
+
+	cfg := config.LoadForTest()
+	m := masker.New(vault.New(cfg.VaultSizeLimit), cfg)
+	p := NewMITMProxy(nil, m, cfg)
+	p.httpClient = upstream.Client()
+	authority := strings.TrimPrefix(upstream.URL, "https://")
+
+	clientRaw, serverRaw := net.Pipe()
+	defer func() { _ = clientRaw.Close() }()
+	defer func() { _ = serverRaw.Close() }()
+	serverTLS := tls.Server(serverRaw, upstream.TLS.Clone())
+	clientTLS := tls.Client(clientRaw, &tls.Config{InsecureSkipVerify: true}) // test-only in-memory peer
+	serverDone := make(chan error, 1)
+	go func() {
+		if err := serverTLS.Handshake(); err != nil {
+			serverDone <- err
+			return
+		}
+		if p.handleMITMRequest(serverTLS, bufio.NewReader(serverTLS), authority) {
+			serverDone <- fmt.Errorf("close request unexpectedly kept alive")
+			return
+		}
+		serverDone <- nil
+	}()
+	if err := clientTLS.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	secret := "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+	body := `{"value":"` + secret + `"}`
+	if _, err := fmt.Fprintf(clientTLS, "POST /stream HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", authority, len(body), body); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(clientTLS), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(output, []byte(secret)) || !bytes.Contains(output, []byte("data:")) {
+		t.Fatalf("stream response was not restored: %q", output)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }

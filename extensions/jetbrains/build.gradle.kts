@@ -7,12 +7,23 @@ plugins {
 group = "com.localai.firewall"
 version = "0.1.0"
 
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation(kotlin("test-junit5"))
+}
+
 intellij {
     version.set("2024.1")
     type.set("IC")
 }
 
 tasks {
+    test {
+        useJUnitPlatform()
+    }
     patchPluginXml {
         sinceBuild.set("241")
         untilBuild.set("243.*")

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Require HTTPS for remote `UPSTREAM_URL` targets; allow plaintext HTTP only for loopback development services and reject URL userinfo, query parameters, and fragments.
+- Block Safe Session arguments that attempt to change the protected model-provider route, the `anonmyz` provider definition, Apps, or request-compression features.
+- Stop IDE extensions from auto-executing workspace/project-root binaries that would receive the provider credential; VS Code accepts `binaryPath` only from global user settings.
+- Derive new encrypted MITM CA keys with salted PBKDF2-HMAC-SHA-256 (210,000 iterations) before AES-256-GCM encryption while retaining legacy-key read compatibility.
+- Detect supported raw credentials split across streaming network reads with a bounded 64 KiB inspection look-behind.
+- Cap non-streaming upstream response bodies at 64 MiB in explicit-proxy and MITM paths.
+- Delay explicit-proxy standard response headers until DLP inspection completes so blocked responses return an unambiguous `502 Bad Gateway` instead of an upstream success status with an empty body.
+- Reject malformed integer and boolean environment values instead of silently falling back; validate listener conflicts, vault capacity, and log levels at startup.
+
+### Added
+
+- Add `anonmyz doctor` and `anonmyz --check-config` for credential-safe configuration validation without starting listeners.
+- Add a shared transport-independent `dlp.Engine` for explicit-proxy and MITM request scopes, standard responses, and streaming restoration.
+- Add request-correlated JSON security events for request, upstream, restoration, and blocking decisions.
+- Add VS Code binary-trust and health-check unit tests and run them in CI.
+- Add a testable VS Code child-process lifecycle with start/stop, stale-child, spawn-error, and shutdown coverage.
+- Add JetBrains binary resolver tests and a Java 17/Gradle CI job.
+- Add real CONNECT/TLS interception, stream, response-limit, trust-store, certificate-cache, and HTTP-framing tests for MITM mode.
+- Add masker/body-size, secret-count, and stream-chunk benchmarks with a CI benchmark report artifact.
+- Add `govulncheck` and npm audit release gates; run Go CI jobs on patched Go 1.26.6.
+- Upgrade the VSIX packaging toolchain to `@vscode/vsce` 3.9.2 and patched transitive dependencies after the audit gate detected high-severity development dependency advisories.
+
+### Changed
+
+- Replace MITM's `goto` keep-alive flow with a per-request function and deterministic scope/body cleanup.
+- Replace process-global metrics with injected per-server recorders; remove the vault package's metrics DTO dependency.
+- Keep only the DLP look-behind required by the active request scope and use a bounded credential-shape tail, reducing the 64-byte stream benchmark from about 8.9 s to 134 ms and allocation from about 38 MB to 0.85 MB for a 64 KiB payload.
+- Skip regex replacement buffers when a pattern is absent; a safe 32 MiB body now allocates about 56 KiB instead of 1.07 GiB, guarded by a backing-storage and allocation-budget test.
+- Add a single-pass character-feature prefilter before regex evaluation, reducing the 32 MiB safe-body benchmark from about 14.4 s to 1.32 s and allocation to about 21 KiB without changing detector semantics.
+- Pin Docker builder/runtime images to patched immutable digests and pin GoReleaser/golangci-lint tool versions.
+- Publish race coverage, benchmark and VSIX CI artefacts; generate per-archive SPDX SBOMs, checksums and GitHub/Sigstore release provenance.
+- Add Dependabot maintenance for Go modules, the VS Code npm lockfile and GitHub Actions.
+
 ## [0.1.0] - 2026-06-17
 
 ### Added

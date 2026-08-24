@@ -55,6 +55,8 @@ func main() {
 		case "version":
 			runVersion()
 			os.Exit(0)
+		case "doctor", "--check-config":
+			os.Exit(runCheckConfig())
 		case "demo":
 			os.Exit(runDemo(os.Args[2:]))
 		case "codex":
@@ -75,13 +77,14 @@ func main() {
 	// The vault lives for the entire process lifetime.
 	// (Vault, tüm süreç ömrü boyunca yaşar.)
 	v := vault.New(cfg.VaultSizeLimit)
+	counters := metrics.NewCounters()
 
 	// ── 3. Masker (Maskeleme Motoru) ──────────────────────────────────────────
-	m := masker.New(v, cfg)
+	m := masker.New(v, cfg, counters)
 	traces := audit.NewStore(200)
 
 	// ── 4. Proxy Server + HTTP mux ────────────────────────────────────────────
-	firewallSrv := proxy.NewServer(cfg, m, traces)
+	firewallSrv := proxy.NewServerWithMetrics(cfg, m, traces, counters)
 
 	mux := http.NewServeMux()
 
@@ -90,12 +93,12 @@ func main() {
 	// (Vault doluluk oranı, maske sayıları ve gecikme içeren JSON döner.)
 	// Restricted to localhost to prevent leaking internal state to AI providers.
 	// (Yapay zeka sağlayıcılarına iç durumu sızdırmamak için yalnızca localhost'a kısıtlandı.)
-	mux.HandleFunc("/metrics", localhostOnly(metrics.Global.Handler(v)))
+	mux.HandleFunc("/metrics", localhostOnly(counters.Handler(v)))
 
 	// /dashboard — visual metrics dashboard (görsel metrik gösterge paneli)
 	// HTML interface for monitoring firewall stats in real-time.
 	// (Gerçek zamanlı güvenlik duvarı istatistiklerini izlemek için HTML arayüz.)
-	mux.HandleFunc("/dashboard", localhostOnly(metrics.Global.HTMLHandler(v)))
+	mux.HandleFunc("/dashboard", localhostOnly(counters.HTMLHandler(v)))
 	mux.HandleFunc("/audit", localhostOnly(traces.Handler()))
 
 	// All other paths go through the firewall pipeline.
@@ -194,7 +197,7 @@ func main() {
 	v.Reset()
 	finalStats := v.Stats()
 	log.Printf("[firewall][info] vault cleared — final stats: %+v", finalStats)
-	log.Printf("[firewall][info] metrics snapshot: %+v", metrics.Global.Snapshot(nil))
+	log.Printf("[firewall][info] metrics snapshot: %+v", counters.Snapshot(nil))
 	log.Println("[firewall][info] goodbye.")
 }
 
@@ -328,6 +331,32 @@ func runVersion() {
 	fmt.Printf("anonmyz %s (ai-firewall compatible)\n", version)
 }
 
+// runCheckConfig validates all server environment variables without opening a
+// listener or creating key material. It deliberately prints no credential
+// values, making it safe to use in CI and deployment health checks.
+func runCheckConfig() int {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Configuration invalid: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Configuration valid: upstream=%s provider=%s firewall_port=%d mitm_enabled=%t",
+		cfg.UpstreamURL, providerDisplayName(cfg.ProviderHint), cfg.ListenPort, cfg.MITMEnabled)
+	if cfg.MITMEnabled {
+		fmt.Printf(" mitm_port=%d", cfg.MITMPort)
+	}
+	fmt.Println()
+	return 0
+}
+
+func providerDisplayName(hint string) string {
+	if hint == "" {
+		return "auto-detect"
+	}
+	return hint
+}
+
 // runUsage prints a short command reference. Shown only for "help"/"-h"/"--help";
 // running without arguments still starts the server.
 //
@@ -346,6 +375,8 @@ Usage:
   anonmyz install-ca         Install the MITM CA certificate into the system trust store.
   anonmyz uninstall-ca       Remove the MITM CA certificate from the system trust store.
   anonmyz version            Print the build version.
+  anonmyz doctor             Validate configuration without starting a server.
+  anonmyz --check-config     Alias for doctor.
   anonmyz help               Show this help message.
 
 The legacy ai-firewall binary name remains fully compatible.

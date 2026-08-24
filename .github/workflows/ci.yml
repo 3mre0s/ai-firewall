@@ -14,11 +14,11 @@ jobs:
     name: Build / Vet / Test / Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.26.6"
           cache: true
 
       - name: Build
@@ -27,8 +27,19 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./... -race -count=1
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+      - name: Race tests and coverage
+        run: go test ./... -race -covermode=atomic -coverprofile=coverage.out -count=1
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          if-no-files-found: error
 
       - name: Format check
         run: |
@@ -40,21 +51,30 @@ jobs:
             exit 1
           fi
 
+      - name: Security performance benchmarks
+        run: go test ./masker ./dlp -run '^$' -bench 'Benchmark(Mask|StreamProcessor)' -benchmem -benchtime=1x -count=1 | tee benchmark.txt
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-benchmarks
+          path: benchmark.txt
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.26.6"
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@db9de0fc1a667e1a49d2291a1a042dff081d78f6 # v9
         with:
-          version: latest
+          version: v2.11.0
           args: --timeout=5m
 
   build:
@@ -68,11 +88,11 @@ jobs:
           - goos: windows
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.26.6"
           cache: true
 
       - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -86,18 +106,50 @@ jobs:
     name: VS Code Extension Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
       - name: Install dependencies
         working-directory: extensions/vscode
-        run: npm install
+        run: npm ci
+
+      - name: Dependency security audit
+        working-directory: extensions/vscode
+        run: npm audit --audit-level=high
+
+      - name: Unit tests
+        working-directory: extensions/vscode
+        run: npm test
 
       - name: Check package
         working-directory: extensions/vscode
         run: |
-          npm install -g @vscode/vsce@2.32.0
-          vsce package --out test.vsix
+          npx --no-install vsce package --out test.vsix
+
+      - name: Upload extension package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vscode-extension
+          path: extensions/vscode/test.vsix
+
+  jetbrains-extension:
+    name: JetBrains Extension Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Unit tests
+        working-directory: extensions/jetbrains
+        run: gradle test --no-daemon

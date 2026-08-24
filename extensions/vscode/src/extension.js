@@ -11,8 +11,10 @@ const vscode  = require('vscode');
 const cp      = require('child_process');
 const path    = require('path');
 const fs      = require('fs');
-const http    = require('http');
 const os      = require('os');
+const { globalConfiguredPath, standardSearchPaths } = require('./binary');
+const { pingHealth } = require('./health');
+const { ProcessLifecycle } = require('./process-lifecycle');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -24,8 +26,8 @@ const HEALTH_POLL_MS     = 300;    // interval while waiting for startup
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
-/** @type {cp.ChildProcess|null} */
-let proc          = null;
+/** @type {ProcessLifecycle|null} */
+let lifecycle     = null;
 /** @type {vscode.StatusBarItem|null} */
 let statusBar     = null;
 /** @type {vscode.OutputChannel|null} */
@@ -45,6 +47,22 @@ async function activate(ctx) {
     secrets = ctx.secrets;
     out     = vscode.window.createOutputChannel('Local AI Firewall');
     ctx.subscriptions.push(out);
+    lifecycle = new ProcessLifecycle({
+        spawn: cp.spawn,
+        onStdout: data => out.append(data.toString()),
+        onStderr: data => out.append(data.toString()),
+        onError: error => {
+            out.appendLine(`[error] ${error.message}`);
+            vscode.window.showErrorMessage(`🔥 Firewall failed to start: ${error.message}`);
+            renderStatus('error');
+            stopHealthCheck();
+        },
+        onExit: (code, signal) => {
+            out.appendLine(`\n[firewall] exited  code=${code}  signal=${signal}`);
+            renderStatus('stopped');
+            stopHealthCheck();
+        },
+    });
 
     // Status bar — always visible on the right side, click = toggle
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -76,17 +94,15 @@ async function activate(ctx) {
 /** Called when VS Code shuts down or the extension is uninstalled. */
 function deactivate() {
     stopHealthCheck();
-    if (proc) {
-        proc.kill('SIGTERM');
-        proc = null;
-    }
+    lifecycle?.dispose();
+    lifecycle = null;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 /** Start the firewall binary as a child process. */
 async function cmdStart(ctx) {
-    if (proc) {
+    if (lifecycle?.active) {
         vscode.window.showInformationMessage('🔥 Firewall is already running.');
         return;
     }
@@ -115,24 +131,7 @@ async function cmdStart(ctx) {
     out.appendLine(`\n[firewall] Starting on :${port}  binary=${binary}`);
     out.appendLine(`[firewall] Upstream: ${env.UPSTREAM_URL}\n`);
 
-    proc = cp.spawn(binary, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-
-    proc.stdout.on('data', d => out.append(d.toString()));
-    proc.stderr.on('data', d => out.append(d.toString()));
-
-    proc.on('error', err => {
-        out.appendLine(`[error] ${err.message}`);
-        vscode.window.showErrorMessage(`🔥 Firewall failed to start: ${err.message}`);
-        proc = null;
-        renderStatus('error');
-    });
-
-    proc.on('exit', (code, signal) => {
-        out.appendLine(`\n[firewall] exited  code=${code}  signal=${signal}`);
-        proc = null;
-        renderStatus('stopped');
-        stopHealthCheck();
-    });
+    if (!lifecycle?.start(binary, env)) return;
 
     renderStatus('starting');
     const healthy = await waitUntilHealthy(port);
@@ -144,6 +143,8 @@ async function cmdStart(ctx) {
             'Copy Agent Env'
         ).then(v => v === 'Copy Agent Env' && cmdCopyEnv());
     } else {
+        lifecycle.stop();
+        stopHealthCheck();
         renderStatus('error');
         vscode.window.showErrorMessage(
             'Firewall did not respond to /health — check Output for logs.',
@@ -154,23 +155,28 @@ async function cmdStart(ctx) {
 
 /** Stop the running firewall. */
 async function cmdStop() {
-    if (!proc) {
+    if (!lifecycle?.active) {
         vscode.window.showInformationMessage('Firewall is not running.');
         return;
     }
-    proc.kill('SIGTERM');
+    lifecycle.stop();
     stopHealthCheck();
     // proc.on('exit') will call renderStatus('stopped')
 }
 
 /** Restart: stop → short pause → start. */
 async function cmdRestart(ctx) {
-    if (proc) {
+    if (lifecycle?.active) {
         await cmdStop();
-        // wait for proc to become null (max 2 seconds)
+        // wait for the child exit event (max 2 seconds)
         const deadline = Date.now() + 2000;
-        while (proc !== null && Date.now() < deadline) {
+        while (lifecycle.active && Date.now() < deadline) {
             await sleep(50);
+        }
+        if (lifecycle.active) {
+            renderStatus('error');
+            vscode.window.showErrorMessage('Firewall did not stop within 2 seconds; restart cancelled.');
+            return;
         }
     }
     await cmdStart(ctx);
@@ -284,7 +290,10 @@ async function firstRunWizard(ctx) {
 async function resolveBinary(ctx) {
     const c          = cfg();
     const name       = os.platform() === 'win32' ? 'ai-firewall.exe' : 'ai-firewall';
-    const configured = c.get('binaryPath');
+    // Only the global user setting is trusted. Repositories can define
+    // workspace settings, so accepting cfg().get() here would let an untrusted
+    // checkout select the executable that receives FORWARD_API_KEY.
+    const configured = globalConfiguredPath(c.inspect('binaryPath'));
 
     // 1. Explicit setting
     if (configured && fs.existsSync(configured)) return configured;
@@ -296,23 +305,17 @@ async function resolveBinary(ctx) {
         if (fs.existsSync(expanded)) return expanded;
     }
 
-    // 3. Workspace root folders
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        const p = path.join(folder.uri.fsPath, name);
-        if (fs.existsSync(p)) return p;
-    }
-
-    // 4. Extension bundle directory (when binary is shipped alongside VSIX)
+    // 3. Extension bundle directory (when binary is shipped alongside VSIX)
     const bundled = path.join(ctx.extensionPath, name);
     if (fs.existsSync(bundled)) return bundled;
 
-    // 5. OS standard install locations
+    // 4. OS standard install locations
     const candidates = binarySearchPaths(name);
     for (const p of candidates) {
         if (fs.existsSync(p)) return p;
     }
 
-    // 6. PATH lookup
+    // 5. PATH lookup
     try {
         const cmd    = os.platform() === 'win32' ? `where ${name}` : `which ${name}`;
         const result = cp.execSync(cmd, { encoding: 'utf8', timeout: 2000 }).trim().split('\n')[0];
@@ -351,27 +354,7 @@ async function resolveBinary(ctx) {
  * @returns {string[]}
  */
 function binarySearchPaths(name) {
-    const home = os.homedir();
-    switch (os.platform()) {
-        case 'win32':
-            return [
-                path.join(process.env['LOCALAPPDATA'] || '', 'local-ai-firewall', name),
-                path.join(process.env['ProgramFiles']  || '', 'local-ai-firewall', name),
-            ];
-        case 'darwin':
-            return [
-                path.join(home, 'Library', 'Application Support', 'local-ai-firewall', name),
-                path.join('/opt/homebrew/bin', name),   // Apple Silicon Homebrew
-                path.join('/usr/local/bin', name),      // Intel Homebrew
-                path.join(home, '.local', 'bin', name),
-            ];
-        default: // linux + other unix
-            return [
-                path.join(home, '.local', 'bin', name),
-                path.join('/usr/local/bin', name),
-                path.join('/usr/bin', name),
-            ];
-    }
+    return standardSearchPaths(name, os.platform(), os.homedir(), process.env);
 }
 
 // ── API key resolution ────────────────────────────────────────────────────────
@@ -436,7 +419,7 @@ async function waitUntilHealthy(port) {
 function startHealthCheck(port) {
     stopHealthCheck();
     healthTimer = setInterval(async () => {
-        if (!proc) { stopHealthCheck(); return; }
+        if (!lifecycle?.active) { stopHealthCheck(); return; }
         const ok = await pingHealth(port);
         renderStatus(ok ? 'running' : 'error');
     }, HEALTH_INTERVAL_MS);
@@ -451,17 +434,6 @@ function stopHealthCheck() {
  * @param {number} port
  * @returns {Promise<boolean>}
  */
-function pingHealth(port) {
-    return new Promise(resolve => {
-        const req = http.get(
-            { host: '127.0.0.1', port, path: '/health', timeout: 500 },
-            res => { resolve(res.statusCode === 200); }
-        );
-        req.on('error',   () => resolve(false));
-        req.on('timeout', () => { req.destroy(); resolve(false); });
-    });
-}
-
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 /** @returns {vscode.WorkspaceConfiguration} */

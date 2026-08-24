@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for wanting to test Local AI Firewall.
+        Thanks for wanting to test Anonmyz.
         We add testers in small batches so we can actually answer your questions.
   - type: input
     id: handle

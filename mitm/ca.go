@@ -13,17 +13,21 @@ import (
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"log"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -384,34 +388,23 @@ func randomSerialNumber() (*big.Int, error) {
 // ════════════════════════════════════════════════════════════════════════════
 
 // encryptKeyPEM encrypts DER-encoded EC private key bytes with AES-256-GCM.
-// The 32-byte cipher key is derived from the passphrase via SHA-256.
-// The 12-byte random nonce is prepended to the ciphertext inside the PEM block.
-// Returns a PEM block of type "ENCRYPTED EC PRIVATE KEY".
-//
-// SECURITY TRADE-OFF: SHA-256(passphrase) is a raw hash, not a password-based
-// key derivation function (KDF). It provides no brute-force resistance against
-// offline dictionary attacks. For stronger protection — especially if the CA key
-// file may be exposed — replace this with a proper KDF such as scrypt or Argon2id
-// (golang.org/x/crypto/scrypt or golang.org/x/crypto/argon2). This is an
-// accepted trade-off for a local CA key: the key file itself is 0600 and the
-// passphrase is delivered via environment variable, not stored on disk.
-//
-// (DER kodlu EC özel anahtar baytlarını AES-256-GCM ile şifreler.
-//
-//	32 baytlık şifre anahtarı passphrase'den SHA-256 ile türetilir.
-//	12 baytlık rastgele nonce, PEM bloğu içinde şifreli metnin başına eklenir.
-//	"ENCRYPTED EC PRIVATE KEY" türünde PEM bloğu döner.
-//
-//	GÜVENLİK TRADE-OFF: SHA-256(passphrase) ham bir özetleme işlemidir; parola
-//	tabanlı anahtar türetme işlevi (KDF) değildir. Çevrimdışı sözlük saldırılarına
-//	karşı kaba-kuvvet direnci sağlamaz. Daha güçlü koruma için scrypt veya
-//	Argon2id kullanılabilir. Yerel CA anahtarı için kabul edilebilir bir
-//	trade-off'tur: anahtar dosyası 0600 izinlidir ve passphrase ortam değişkeniyle
-//	iletilir, diske yazılmaz.)
-func encryptKeyPEM(keyDER []byte, passphrase string) ([]byte, error) {
-	h := sha256.Sum256([]byte(passphrase))
+// New files use PBKDF2-HMAC-SHA-256 with a random salt and 210,000 iterations.
+// KDF metadata is stored in versioned PEM headers; AES-GCM rejects metadata
+// changes that derive the wrong key. Legacy unsalted files
+// remain readable so upgrades do not lock out existing installations.
+const (
+	caKeyKDFIterations = 210_000
+	caKeySaltBytes     = 16
+)
 
-	block, err := aes.NewCipher(h[:])
+func encryptKeyPEM(keyDER []byte, passphrase string) ([]byte, error) {
+	salt := make([]byte, caKeySaltBytes)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("generating KDF salt: %w", err)
+	}
+	key := deriveCAKeyPBKDF2([]byte(passphrase), salt, caKeyKDFIterations, 32)
+
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("creating AES cipher: %w", err)
 	}
@@ -433,6 +426,11 @@ func encryptKeyPEM(keyDER []byte, passphrase string) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{
 		Type:  "ENCRYPTED EC PRIVATE KEY",
 		Bytes: sealed,
+		Headers: map[string]string{
+			"KDF":        "pbkdf2-sha256-v1",
+			"Salt":       hex.EncodeToString(salt),
+			"Iterations": strconv.Itoa(caKeyKDFIterations),
+		},
 	}), nil
 }
 
@@ -443,9 +441,29 @@ func encryptKeyPEM(keyDER []byte, passphrase string) ([]byte, error) {
 //
 //	Şifre anahtarı, encryptKeyPEM ile aynı şekilde passphrase'den türetilir.)
 func decryptKeyDER(block *pem.Block, passphrase string) ([]byte, error) {
-	h := sha256.Sum256([]byte(passphrase))
+	var key []byte
+	if block.Headers["KDF"] == "" {
+		// Legacy files used SHA-256(passphrase) without a salt. Continue reading
+		// them so existing installations are not locked out; newly generated
+		// files always use the versioned, salted slow KDF above.
+		h := sha256.Sum256([]byte(passphrase))
+		key = h[:]
+	} else {
+		if block.Headers["KDF"] != "pbkdf2-sha256-v1" {
+			return nil, fmt.Errorf("unsupported CA key KDF %q", block.Headers["KDF"])
+		}
+		salt, err := hex.DecodeString(block.Headers["Salt"])
+		if err != nil || len(salt) != caKeySaltBytes {
+			return nil, fmt.Errorf("invalid CA key KDF salt")
+		}
+		iterations, err := strconv.Atoi(block.Headers["Iterations"])
+		if err != nil || iterations < 100_000 || iterations > 10_000_000 {
+			return nil, fmt.Errorf("invalid CA key KDF iteration count")
+		}
+		key = deriveCAKeyPBKDF2([]byte(passphrase), salt, iterations, 32)
+	}
 
-	c, err := aes.NewCipher(h[:])
+	c, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("creating AES cipher: %w", err)
 	}
@@ -465,4 +483,29 @@ func decryptKeyDER(block *pem.Block, passphrase string) ([]byte, error) {
 		return nil, fmt.Errorf("AES-GCM decryption failed — wrong passphrase?: %w", err)
 	}
 	return plain, nil
+}
+
+func deriveCAKeyPBKDF2(passphrase, salt []byte, iterations, keyLen int) []byte {
+	hashLen := sha256.Size
+	blocks := (keyLen + hashLen - 1) / hashLen
+	derived := make([]byte, 0, blocks*hashLen)
+	for block := 1; block <= blocks; block++ {
+		mac := hmac.New(sha256.New, passphrase)
+		_, _ = mac.Write(salt)
+		var index [4]byte
+		binary.BigEndian.PutUint32(index[:], uint32(block))
+		_, _ = mac.Write(index[:])
+		u := mac.Sum(nil)
+		t := append([]byte(nil), u...)
+		for i := 1; i < iterations; i++ {
+			mac = hmac.New(sha256.New, passphrase)
+			_, _ = mac.Write(u)
+			u = mac.Sum(nil)
+			for j := range t {
+				t[j] ^= u[j]
+			}
+		}
+		derived = append(derived, t...)
+	}
+	return derived[:keyLen]
 }

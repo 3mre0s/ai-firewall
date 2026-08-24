@@ -48,6 +48,56 @@ type SensitivePattern struct {
 	//  (GroupIndex==0 için tam eşleşme, GroupIndex>0 için yakalama grubu).
 	//  false döndürmek o eşleşme için maskelemeyi atlar.)
 	Validate func(string) bool
+
+	// RequiredFeatures is a conservative prefilter. A regex is skipped only
+	// when the original input lacks a character class that the expression
+	// cannot possibly match, avoiding repeated full-body regex scans.
+	RequiredFeatures TextFeatures
+}
+
+type TextFeatures uint16
+
+const (
+	FeatureDigit TextFeatures = 1 << iota
+	FeatureUpper
+	FeatureHyphen
+	FeatureUnderscore
+	FeatureDot
+	FeatureAt
+	FeatureSlash
+	FeatureBackslash
+	FeatureAssignmentSeparator
+)
+
+func AnalyzeText(text string) TextFeatures {
+	var features TextFeatures
+	for i := 0; i < len(text); i++ {
+		switch c := text[i]; {
+		case c >= '0' && c <= '9':
+			features |= FeatureDigit
+		case c >= 'A' && c <= 'Z':
+			features |= FeatureUpper
+		case c == '-':
+			features |= FeatureHyphen
+		case c == '_':
+			features |= FeatureUnderscore
+		case c == '.':
+			features |= FeatureDot
+		case c == '@':
+			features |= FeatureAt
+		case c == '/':
+			features |= FeatureSlash
+		case c == '\\':
+			features |= FeatureBackslash
+		case c == '=' || c == ':':
+			features |= FeatureAssignmentSeparator
+		}
+	}
+	return features
+}
+
+func (p SensitivePattern) MayMatch(features TextFeatures) bool {
+	return features&p.RequiredFeatures == p.RequiredFeatures
 }
 
 // validateLuhn implements the Luhn checksum used by credit card numbers.
@@ -327,42 +377,47 @@ var Registry = []SensitivePattern{
 		// Anthropic API key: sk-ant-<type>-<random>
 		// Must come BEFORE the generic OpenAI sk- pattern to get the correct label.
 		// (Anthropic API anahtarı: doğru etiketi almak için genel OpenAI sk- deseninden ÖNCE gelmeli.)
-		Name:   "Anthropic API Key",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-_]{20,}\b`),
-		Prefix: "ANT_KEY",
+		Name:             "Anthropic API Key",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-_]{20,}\b`),
+		Prefix:           "ANT_KEY",
+		RequiredFeatures: FeatureHyphen,
 	},
 	{
-		Name:   "OpenAI API Key",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bsk-(?:proj-)?[A-Za-z0-9\-_]{20,}\b`),
-		Prefix: "OAI_KEY",
+		Name:             "OpenAI API Key",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bsk-(?:proj-)?[A-Za-z0-9\-_]{20,}\b`),
+		Prefix:           "OAI_KEY",
+		RequiredFeatures: FeatureHyphen,
 	},
 	{
 		// Google API key: AIza followed by 35 alphanumeric/dash/underscore chars.
 		// (Google API anahtarı: AIza ile başlayıp 35 alfanümerik/tire/alt çizgi karakter.)
-		Name:   "Google API Key",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`),
-		Prefix: "GOOG_KEY",
+		Name:             "Google API Key",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bAIza[0-9A-Za-z_\-]{35}\b`),
+		Prefix:           "GOOG_KEY",
+		RequiredFeatures: FeatureUpper,
 	},
 	{
 		// Slack tokens: xoxb- (bot), xoxp- (user), xoxa- (app), xoxs- (session).
 		// (Slack jetonları: xoxb- (bot), xoxp- (kullanıcı), xoxa- (uygulama), xoxs- (oturum).)
-		Name:   "Slack Token",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bxox[bpas]-[A-Za-z0-9\-]{20,}\b`),
-		Prefix: "SLACK_TOK",
+		Name:             "Slack Token",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bxox[bpas]-[A-Za-z0-9\-]{20,}\b`),
+		Prefix:           "SLACK_TOK",
+		RequiredFeatures: FeatureHyphen,
 	},
 	{
 		// Stripe live-mode keys: sk_live_... (secret) and pk_live_... (publishable).
 		// Test keys (sk_test_) are also matched to catch accidental exposure.
 		// (Stripe canlı mod anahtarları: sk_live_... (gizli) ve pk_live_... (yayımlanabilir).
 		//  Test anahtarları da (sk_test_) kazara ifşayı yakalamak için eşleştirilir.)
-		Name:   "Stripe API Key",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,}\b`),
-		Prefix: "STRIPE_KEY",
+		Name:             "Stripe API Key",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\b(?:sk|pk|rk)_(?:live|test)_[0-9a-zA-Z]{24,}\b`),
+		Prefix:           "STRIPE_KEY",
+		RequiredFeatures: FeatureUnderscore,
 	},
 	{
 		// Standalone JWT (3-part base64url without a "Bearer" prefix).
@@ -372,40 +427,46 @@ var Registry = []SensitivePattern{
 		// (Standalone JWT — "Bearer" öneki olmadan, doğrudan JSON alanında gömülü.
 		//  Üstteki Bearer Token deseni "Bearer eyJ..." yi zaten yakalıyor; bu desen
 		//  JSON gövdesine doğrudan gömülü ham JWT'leri yakalar.)
-		Name:   "JWT (standalone)",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}`),
-		Prefix: "JWT",
+		Name:             "JWT (standalone)",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}`),
+		Prefix:           "JWT",
+		RequiredFeatures: FeatureDot,
 	},
 	{
-		Name:   "GitHub Personal Access Token v1",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bghp_[A-Za-z0-9]{36}\b`),
-		Prefix: "GH_PAT",
+		Name:             "GitHub Personal Access Token v1",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bghp_[A-Za-z0-9]{36}\b`),
+		Prefix:           "GH_PAT",
+		RequiredFeatures: FeatureUnderscore,
 	},
 	{
-		Name:   "GitHub OAuth App Token",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bgho_[A-Za-z0-9]{36}\b`),
-		Prefix: "GH_OAT",
+		Name:             "GitHub OAuth App Token",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bgho_[A-Za-z0-9]{36}\b`),
+		Prefix:           "GH_OAT",
+		RequiredFeatures: FeatureUnderscore,
 	},
 	{
-		Name:   "GitHub Actions / Installation Token",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bghs_[A-Za-z0-9]{36}\b`),
-		Prefix: "GH_ACT",
+		Name:             "GitHub Actions / Installation Token",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bghs_[A-Za-z0-9]{36}\b`),
+		Prefix:           "GH_ACT",
+		RequiredFeatures: FeatureUnderscore,
 	},
 	{
-		Name:   "GitLab Personal Access Token",
-		Type:   TypeToken,
-		Regex:  regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}\b`),
-		Prefix: "GL_PAT",
+		Name:             "GitLab Personal Access Token",
+		Type:             TypeToken,
+		Regex:            regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}\b`),
+		Prefix:           "GL_PAT",
+		RequiredFeatures: FeatureHyphen,
 	},
 	{
-		Name:   "AWS Access Key ID (Erişim Anahtarı Kimliği)",
-		Type:   TypeKey,
-		Regex:  regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
-		Prefix: "AWS_AK",
+		Name:             "AWS Access Key ID (Erişim Anahtarı Kimliği)",
+		Type:             TypeKey,
+		Regex:            regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
+		Prefix:           "AWS_AK",
+		RequiredFeatures: FeatureDigit | FeatureUpper,
 	},
 	{
 		Name:       "AWS Secret Access Key",
@@ -430,10 +491,11 @@ var Registry = []SensitivePattern{
 	{
 		// Matches full PEM blocks (tam PEM bloklarını eşleştirir):
 		// -----BEGIN RSA PRIVATE KEY----- ... -----END RSA PRIVATE KEY-----
-		Name:   "PEM Private Key Block",
-		Type:   TypeKey,
-		Regex:  regexp.MustCompile(`-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]{10,}?-----END (?:[A-Z]+ )?PRIVATE KEY-----`),
-		Prefix: "PEM_KEY",
+		Name:             "PEM Private Key Block",
+		Type:             TypeKey,
+		Regex:            regexp.MustCompile(`-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]{10,}?-----END (?:[A-Z]+ )?PRIVATE KEY-----`),
+		Prefix:           "PEM_KEY",
+		RequiredFeatures: FeatureHyphen,
 	},
 
 	// ── Environment Variable Secrets (Çevre Değişkeni Gizlilikleri) ──────────
@@ -442,20 +504,22 @@ var Registry = []SensitivePattern{
 		// Matches: PASSWORD=mysecret  /  api_key: "abc123"  /  TOKEN='xyz'
 		// Only the value after the separator is masked, not the key name.
 		// (Ayırıcıdan sonraki değer maskelenir, anahtar adı değil.)
-		Name:       "Inline Secret Assignment (Satır İçi Gizlilik Ataması)",
-		Type:       TypeSecret,
-		Regex:      regexp.MustCompile(`(?i)(?:password|passwd|secret|api[_\-]?key|access[_\-]?token|auth[_\-]?token)\s*[=:]\s*["']?([^\s"'&<>\n]{8,64})["']?`),
-		Prefix:     "SECRET",
-		GroupIndex: 1,
+		Name:             "Inline Secret Assignment (Satır İçi Gizlilik Ataması)",
+		Type:             TypeSecret,
+		Regex:            regexp.MustCompile(`(?i)(?:password|passwd|secret|api[_\-]?key|access[_\-]?token|auth[_\-]?token)\s*[=:]\s*["']?([^\s"'&<>\n]{8,64})["']?`),
+		Prefix:           "SECRET",
+		GroupIndex:       1,
+		RequiredFeatures: FeatureAssignmentSeparator,
 	},
 	{
 		// Matches: export DB_PASS=hunter2  /  set TOKEN=abc
 		// (export/set komutlarındaki atamaları yakalar)
-		Name:       "Shell Export / Set Command",
-		Type:       TypeSecret,
-		Regex:      regexp.MustCompile(`(?i)(?:export|set)\s+[A-Z][A-Z0-9_]*=["']?([^\s"'\n]{8,})["']?`),
-		Prefix:     "ENV_VAL",
-		GroupIndex: 1,
+		Name:             "Shell Export / Set Command",
+		Type:             TypeSecret,
+		Regex:            regexp.MustCompile(`(?i)(?:export|set)\s+[A-Z][A-Z0-9_]*=["']?([^\s"'\n]{8,})["']?`),
+		Prefix:           "ENV_VAL",
+		GroupIndex:       1,
+		RequiredFeatures: FeatureAssignmentSeparator,
 	},
 
 	// ── File-System Paths (Dosya Sistemi Yolları) ─────────────────────────────
@@ -464,11 +528,12 @@ var Registry = []SensitivePattern{
 		// Unix absolute paths starting from common root dirs.
 		// A minimum depth of 3 segments avoids false positives like "/usr" alone.
 		// (Minimum 3 segment derinliği, "/usr" gibi yanlış pozitifleri önler.)
-		Name:       "Unix Absolute Path (Unix Mutlak Yol)",
-		Type:       TypePath,
-		Regex:      regexp.MustCompile(`(?:^|[\s"'` + "`" + `])((?:/(?:home|root|Users|var|etc|opt|srv|mnt|tmp))[^\s"'` + "`" + `\n]{4,})`),
-		Prefix:     "UNIX_PATH",
-		GroupIndex: 1,
+		Name:             "Unix Absolute Path (Unix Mutlak Yol)",
+		Type:             TypePath,
+		Regex:            regexp.MustCompile(`(?:^|[\s"'` + "`" + `])((?:/(?:home|root|Users|var|etc|opt|srv|mnt|tmp))[^\s"'` + "`" + `\n]{4,})`),
+		Prefix:           "UNIX_PATH",
+		GroupIndex:       1,
+		RequiredFeatures: FeatureSlash,
 	},
 	{
 		// Windows absolute paths: C:\Users\alice\project
@@ -481,46 +546,51 @@ var Registry = []SensitivePattern{
 		//  halde bu, sıradan bir kelimenin sonu ile JSON kaçışlı iki nokta/
 		//  ters eğik çizgi dizisini eşleştirir, örn. bir JSON dizesi içindeki
 		//  "output:\n{", JSON'u bozar.)
-		Name:       "Windows Absolute Path (Windows Mutlak Yol)",
-		Type:       TypePath,
-		Regex:      regexp.MustCompile(`(?:^|[^A-Za-z0-9])([A-Za-z]:\\(?:[^\\/:\*\?"<>|\n]+\\)+[^\\/:\*\?"<>|\n]*)`),
-		Prefix:     "WIN_PATH",
-		GroupIndex: 1,
+		Name:             "Windows Absolute Path (Windows Mutlak Yol)",
+		Type:             TypePath,
+		Regex:            regexp.MustCompile(`(?:^|[^A-Za-z0-9])([A-Za-z]:\\(?:[^\\/:\*\?"<>|\n]+\\)+[^\\/:\*\?"<>|\n]*)`),
+		Prefix:           "WIN_PATH",
+		GroupIndex:       1,
+		RequiredFeatures: FeatureBackslash,
 	},
 
 	// ── PII — Personally Identifiable Information (Kişisel Tanımlanabilir Bilgi) ─
 
 	{
-		Name:   "E-mail Address (E-posta Adresi)",
-		Type:   TypePII,
-		Regex:  regexp.MustCompile(`\b[a-zA-Z0-9._%+\-]{2,}@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,6}\b`),
-		Prefix: "EMAIL",
+		Name:             "E-mail Address (E-posta Adresi)",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b[a-zA-Z0-9._%+\-]{2,}@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,6}\b`),
+		Prefix:           "EMAIL",
+		RequiredFeatures: FeatureAt,
 	},
 	{
 		// Matches credit card numbers with optional spaces/dashes between groups.
 		// Covers Visa (13-19 digits), Mastercard (16), Amex (15), Discover (16-19).
 		// (Gruplar arasında isteğe bağlı boşluk/tire ile kredi kartı numaralarını eşleştirir.)
-		Name:     "Credit Card Number (Kredi Kartı Numarası)",
-		Type:     TypePII,
-		Regex:    regexp.MustCompile(`\b(?:\d{4}[\s\-]?){3}\d{1,4}\b`),
-		Prefix:   "CC",
-		Validate: validateLuhn,
+		Name:             "Credit Card Number (Kredi Kartı Numarası)",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b(?:\d{4}[\s\-]?){3}\d{1,4}\b`),
+		Prefix:           "CC",
+		Validate:         validateLuhn,
+		RequiredFeatures: FeatureDigit,
 	},
 	{
 		// Turkish IBAN: TR + 2 check digits + 22 account digits (total 26 chars).
 		// (Türk IBAN'ı: TR + 2 kontrol hanesi + 22 hesap hanesi, toplam 26 karakter.)
-		Name:   "Turkish IBAN",
-		Type:   TypePII,
-		Regex:  regexp.MustCompile(`\bTR\d{24}\b`),
-		Prefix: "IBAN_TR",
+		Name:             "Turkish IBAN",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\bTR\d{24}\b`),
+		Prefix:           "IBAN_TR",
+		RequiredFeatures: FeatureDigit | FeatureUpper,
 	},
 	{
 		// International IBAN: 2 letter country code + 2 check digits + up to 30 alphanumeric.
 		// (Uluslararası IBAN: 2 harf ülke kodu + 2 kontrol hanesi + 30 alfanümerik.)
-		Name:   "IBAN",
-		Type:   TypePII,
-		Regex:  regexp.MustCompile(`\b[A-Z]{2}\d{2}[A-Z0-9]{1,30}\b`),
-		Prefix: "IBAN",
+		Name:             "IBAN",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b[A-Z]{2}\d{2}[A-Z0-9]{1,30}\b`),
+		Prefix:           "IBAN",
+		RequiredFeatures: FeatureDigit | FeatureUpper,
 	},
 	{
 		// Turkish National ID (TC Kimlik No): 11 digits, first digit 1-9.
@@ -529,20 +599,22 @@ var Registry = []SensitivePattern{
 		// (TC Kimlik No: ilk hane 1-9, 11 hane. validateTCKimlik resmi iki aşamalı
 		//  sağlama toplamını uygular; sipariş no, zaman damgası gibi yanlış pozitifleri
 		//  ortadan kaldırır.)
-		Name:     "Turkish National ID (TC Kimlik No)",
-		Type:     TypePII,
-		Regex:    regexp.MustCompile(`\b[1-9]\d{10}\b`),
-		Prefix:   "TR_ID",
-		Validate: validateTCKimlik,
+		Name:             "Turkish National ID (TC Kimlik No)",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b[1-9]\d{10}\b`),
+		Prefix:           "TR_ID",
+		Validate:         validateTCKimlik,
+		RequiredFeatures: FeatureDigit,
 	},
 	{
 		// Turkish phone numbers: +90 xxx xxx xx xx, 0xxx xxx xx xx, etc.
 		// Handles various formats with optional country code, parens, spaces.
 		// (Türk telefon numaraları: isteğe bağlı ülke kodu, parantez, boşluk ile çeşitli formatları destekler.)
-		Name:   "Turkish Phone Number (Türk Telefon Numarası)",
-		Type:   TypePII,
-		Regex:  regexp.MustCompile(`\b(?:\+90|0)?[\s\(]?[1-9]\d{2}[\s\)]?\d{3}[\s]?\d{2}[\s]?\d{2}\b`),
-		Prefix: "PHONE_TR",
+		Name:             "Turkish Phone Number (Türk Telefon Numarası)",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b(?:\+90|0)?[\s\(]?[1-9]\d{2}[\s\)]?\d{3}[\s]?\d{2}[\s]?\d{2}\b`),
+		Prefix:           "PHONE_TR",
+		RequiredFeatures: FeatureDigit,
 	},
 
 	// ── National ID numbers (Ulusal Kimlik Numaraları) ───────────────────────
@@ -552,39 +624,43 @@ var Registry = []SensitivePattern{
 		// All-same-digit CPFs (e.g. 11111111111) are invalid by law.
 		// Regex matches both formatted and bare forms; validator runs the
 		// two-step weighted mod-11 checksum.
-		Name:     "Brazilian CPF",
-		Type:     TypePII,
-		Regex:    regexp.MustCompile(`\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b`),
-		Prefix:   "BR_CPF",
-		Validate: validateCPF,
+		Name:             "Brazilian CPF",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b`),
+		Prefix:           "BR_CPF",
+		Validate:         validateCPF,
+		RequiredFeatures: FeatureDigit,
 	},
 	{
 		// Spanish DNI: 8 digits followed immediately by one control letter.
 		// Letter = "TRWAGMYFPDXBNJZSQVHLCKE"[number % 23].
-		Name:     "Spanish DNI",
-		Type:     TypePII,
-		Regex:    regexp.MustCompile(`\b\d{8}[TRWAGMYFPDXBNJZSQVHLCKE]\b`),
-		Prefix:   "ES_DNI",
-		Validate: validateDNI,
+		Name:             "Spanish DNI",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b\d{8}[TRWAGMYFPDXBNJZSQVHLCKE]\b`),
+		Prefix:           "ES_DNI",
+		Validate:         validateDNI,
+		RequiredFeatures: FeatureDigit | FeatureUpper,
 	},
 	{
 		// Indian Aadhaar: 12 digits, first digit 2-9.
 		// Validated with the Verhoeff dihedral-group checksum algorithm.
-		Name:     "Indian Aadhaar",
-		Type:     TypePII,
-		Regex:    regexp.MustCompile(`\b[2-9]\d{11}\b`),
-		Prefix:   "IN_AADHAAR",
-		Validate: validateAadhaar,
+		Name:             "Indian Aadhaar",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`\b[2-9]\d{11}\b`),
+		Prefix:           "IN_AADHAAR",
+		Validate:         validateAadhaar,
+		RequiredFeatures: FeatureDigit,
 	},
 	{
 		// Italian Codice Fiscale: 16 chars — 6 letters + 2 digits + letter +
 		// 2 digits + letter + 3 digits + control letter.
 		// Control char: (sum of odd-position special values + even-position
 		// alphanumeric values) % 26 → A-Z.
-		Name:     "Italian Codice Fiscale",
-		Type:     TypePII,
-		Regex:    regexp.MustCompile(`(?i)\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b`),
-		Prefix:   "IT_CF",
-		Validate: validateCodiceFiscale,
+		Name:             "Italian Codice Fiscale",
+		Type:             TypePII,
+		Regex:            regexp.MustCompile(`(?i)\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b`),
+		Prefix:           "IT_CF",
+		Validate:         validateCodiceFiscale,
+		RequiredFeatures: FeatureDigit,
 	},
 }

@@ -9,7 +9,6 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import java.awt.datatransfer.StringSelection
-import java.io.File
 
 private object FirewallProcess {
     private var process: Process? = null
@@ -20,9 +19,13 @@ private object FirewallProcess {
             return
         }
 
-        val binary = resolveBinary(project)
+        val binary = BinaryResolver.resolve(
+            environment = System.getenv(),
+            osName = System.getProperty("os.name"),
+            home = System.getProperty("user.home") ?: "",
+        )
         if (!binary.exists()) {
-            notify(project, "Build ai-firewall in the project root or set AI_FIREWALL_BINARY.", NotificationType.ERROR)
+            notify(project, "Install ai-firewall globally or set AI_FIREWALL_BINARY to a trusted binary.", NotificationType.ERROR)
             return
         }
 
@@ -58,66 +61,6 @@ private object FirewallProcess {
         start(project)
     }
 
-    private fun resolveBinary(project: Project?): File {
-        val configured = System.getenv("AI_FIREWALL_BINARY")
-        if (!configured.isNullOrBlank()) {
-            return File(expandHome(configured))
-        }
-
-        val osName = System.getProperty("os.name").lowercase()
-        val isWindows = osName.startsWith("windows")
-        val isMac = osName.startsWith("mac") || osName.contains("darwin")
-        val binaryName = if (isWindows) "ai-firewall.exe" else "ai-firewall"
-
-        val candidates = mutableListOf<File>()
-
-        project?.basePath?.let { candidates += File(it, binaryName) }
-
-        val home = System.getProperty("user.home") ?: ""
-        when {
-            isWindows -> {
-                val localAppData = System.getenv("LOCALAPPDATA")
-                    ?: (if (home.isNotEmpty()) "$home\\AppData\\Local" else null)
-                localAppData?.let {
-                    candidates += File("$it\\local-ai-firewall", binaryName)
-                    candidates += File("$it\\Programs\\local-ai-firewall", binaryName)
-                }
-            }
-            isMac -> {
-                if (home.isNotEmpty()) {
-                    candidates += File("$home/Library/Application Support/local-ai-firewall", binaryName)
-                    candidates += File("$home/.local/bin", binaryName)
-                }
-                candidates += File("/opt/homebrew/bin", binaryName)
-                candidates += File("/usr/local/bin", binaryName)
-            }
-            else -> {
-                if (home.isNotEmpty()) {
-                    candidates += File("$home/.local/bin", binaryName)
-                }
-                candidates += File("/usr/local/bin", binaryName)
-                candidates += File("/usr/bin", binaryName)
-            }
-        }
-
-        val pathEnv = System.getenv("PATH").orEmpty()
-        val sep = if (isWindows) ";" else ":"
-        pathEnv.split(sep).filter { it.isNotBlank() }.forEach {
-            candidates += File(it, binaryName)
-        }
-
-        return candidates.firstOrNull { it.exists() }
-            ?: candidates.firstOrNull()
-            ?: File(binaryName)
-    }
-
-    private fun expandHome(value: String): String {
-        if (value.startsWith("~/") || value.startsWith("~\\")) {
-            val home = System.getProperty("user.home") ?: return value
-            return home + value.substring(1)
-        }
-        return value
-    }
 }
 
 class StartFirewallAction : AnAction() {

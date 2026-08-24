@@ -39,7 +39,7 @@ func TestServerPipelineStandard(t *testing.T) {
 		// Reply back containing the masked label
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"reply": "Hello ` + bodyStr + `"}`))
+		_, _ = w.Write([]byte(`{"reply": "Hello ` + bodyStr + `"}`))
 	}))
 	defer mockUpstream.Close()
 
@@ -344,6 +344,9 @@ func TestServerBlocksRawSecretInStandardResponse(t *testing.T) {
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("unsafe standard response status = %d, want 502", rr.Code)
+	}
 	if strings.Contains(rr.Body.String(), fakeToken) {
 		t.Fatal("raw secret from standard upstream response reached the client")
 	}

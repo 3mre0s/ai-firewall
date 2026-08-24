@@ -113,11 +113,12 @@ func runCodex(args []string) int {
 	cfg.ForwardAPIKey = "none"
 	cfg.LogLevel = "silent"
 	v := vault.New(cfg.VaultSizeLimit)
+	counters := metrics.NewCounters()
 	traces := audit.NewStore(200)
-	firewall := proxy.NewServer(cfg, masker.New(v, cfg), traces)
+	firewall := proxy.NewServerWithMetrics(cfg, masker.New(v, cfg, counters), traces, counters)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", localhostOnly(metrics.Global.Handler(v)))
-	mux.HandleFunc("/dashboard", localhostOnly(metrics.Global.HTMLHandler(v)))
+	mux.HandleFunc("/metrics", localhostOnly(counters.Handler(v)))
+	mux.HandleFunc("/dashboard", localhostOnly(counters.HTMLHandler(v)))
 	mux.HandleFunc("/audit", localhostOnly(traces.Handler()))
 	mux.Handle("/", firewall)
 	server := &http.Server{
@@ -165,7 +166,9 @@ func runCodex(args []string) int {
 	waitErr := cmd.Wait()
 	close(stopSignals)
 	signal.Stop(signals)
-	printCodexSessionEvidence(os.Stdout, traces)
+	if err := printCodexSessionEvidence(os.Stdout, traces); err != nil {
+		fmt.Fprintf(os.Stderr, "codex: writing session evidence failed: %v\n", err)
+	}
 	shutdownHTTPServer(server)
 	select {
 	case err := <-serveErr:
@@ -184,9 +187,15 @@ func runCodex(args []string) int {
 	return 1
 }
 
-func printCodexSessionEvidence(w io.Writer, traces *audit.Store) {
+func printCodexSessionEvidence(w io.Writer, traces *audit.Store) error {
+	var writeErr error
+	write := func(format string, args ...any) {
+		if writeErr == nil {
+			_, writeErr = fmt.Fprintf(w, format, args...)
+		}
+	}
 	list := traces.List()
-	fmt.Fprintln(w, "[ANONMYZ] Session evidence (metadata only; raw values never retained)")
+	write("[ANONMYZ] Session evidence (metadata only; raw values never retained)\n")
 	modelRequests := 0
 	prevented := 0
 	roundTripVerified := 0
@@ -197,10 +206,10 @@ func printCodexSessionEvidence(w io.Writer, traces *audit.Store) {
 		}
 		modelRequests++
 		tracePrevented := 0
-		fmt.Fprintf(w, "[ANONMYZ] request=%s path=%s status=%d detections=%d restored=%d response_blocked=%t\n",
+		write("[ANONMYZ] request=%s path=%s status=%d detections=%d restored=%d response_blocked=%t\n",
 			trace.RequestID, trace.Path, trace.UpstreamStatus, len(trace.Detections), trace.RestoredItems, trace.ResponseLeakBlocked)
 		for _, detection := range trace.Detections {
-			fmt.Fprintf(w, "[ANONMYZ] prevented=%t type=%s placeholder=%s\n",
+			write("[ANONMYZ] prevented=%t type=%s placeholder=%s\n",
 				detection.OriginalPrevented, detection.SecretType, detection.PlaceholderID)
 			if detection.OriginalPrevented {
 				tracePrevented++
@@ -214,15 +223,16 @@ func printCodexSessionEvidence(w io.Writer, traces *audit.Store) {
 	}
 	switch {
 	case modelRequests == 0:
-		fmt.Fprintln(w, "[ANONMYZ] NOT VERIFIED: no HTTP model request traversed the proxy")
+		write("[ANONMYZ] NOT VERIFIED: no HTTP model request traversed the proxy\n")
 	case prevented == 0:
-		fmt.Fprintln(w, "[ANONMYZ] NOT VERIFIED: no sensitive pattern was prevented in this session")
+		write("[ANONMYZ] NOT VERIFIED: no sensitive pattern was prevented in this session\n")
 	case roundTripVerified == 0:
-		fmt.Fprintf(w, "[ANONMYZ] PREVENTION VERIFIED: %d sensitive occurrence(s) prevented before upstream\n", prevented)
-		fmt.Fprintln(w, "[ANONMYZ] ROUND TRIP NOT VERIFIED: no successful safe restoration completed")
+		write("[ANONMYZ] PREVENTION VERIFIED: %d sensitive occurrence(s) prevented before upstream\n", prevented)
+		write("[ANONMYZ] ROUND TRIP NOT VERIFIED: no successful safe restoration completed\n")
 	default:
-		fmt.Fprintf(w, "[ANONMYZ] VERIFIED: %d sensitive occurrence(s) prevented before upstream and safely restored\n", roundTripVerified)
+		write("[ANONMYZ] VERIFIED: %d sensitive occurrence(s) prevented before upstream and safely restored\n", roundTripVerified)
 	}
+	return writeErr
 }
 
 func listenLoopback(port int) (net.Listener, error) {
@@ -273,10 +283,14 @@ parseArgs:
 	}
 	if opts.upstream != "" {
 		parsed, err := url.Parse(opts.upstream)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil ||
-			parsed.RawQuery != "" || parsed.Fragment != "" {
+		if err != nil || parsed.Host == "" {
 			return opts, false, fmt.Errorf("invalid upstream URL %q", opts.upstream)
 		}
+		normalized, err := config.NormalizeUpstreamURL(opts.upstream)
+		if err != nil {
+			return opts, false, fmt.Errorf("invalid upstream URL %q: %w", opts.upstream, err)
+		}
+		opts.upstream = normalized
 	}
 	return opts, false, nil
 }
@@ -335,24 +349,39 @@ func validateProtectedCodexArgs(args []string) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "--enable" && i+1 < len(args) && strings.EqualFold(args[i+1], "apps"):
-			return errors.New("cannot enable Codex Apps in a protected Safe Session")
-		case strings.EqualFold(arg, "--enable=apps"):
-			return errors.New("cannot enable Codex Apps in a protected Safe Session")
-		case strings.HasPrefix(arg, "-c") && len(arg) > 2 && isAppsConfig(strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")):
-			return errors.New("cannot override features.apps in a protected Safe Session")
-		case (arg == "-c" || arg == "--config") && i+1 < len(args) && isAppsConfig(args[i+1]):
-			return errors.New("cannot override features.apps in a protected Safe Session")
-		case strings.HasPrefix(arg, "--config=") && isAppsConfig(strings.TrimPrefix(arg, "--config=")):
-			return errors.New("cannot override features.apps in a protected Safe Session")
+		case (arg == "--enable" || arg == "--disable") && i+1 < len(args) && isProtectedFeature(args[i+1]):
+			return fmt.Errorf("cannot change protected Codex feature %q in a Safe Session", args[i+1])
+		case (strings.HasPrefix(arg, "--enable=") || strings.HasPrefix(arg, "--disable=")) && isProtectedFeature(strings.SplitN(arg, "=", 2)[1]):
+			return errors.New("cannot change protected Codex features in a Safe Session")
+		case strings.HasPrefix(arg, "-c") && len(arg) > 2 && isProtectedCodexConfig(strings.TrimPrefix(strings.TrimPrefix(arg, "-c"), "=")):
+			return errors.New("cannot override protected Codex configuration in a Safe Session")
+		case (arg == "-c" || arg == "--config") && i+1 < len(args) && isProtectedCodexConfig(args[i+1]):
+			return errors.New("cannot override protected Codex configuration in a Safe Session")
+		case strings.HasPrefix(arg, "--config=") && isProtectedCodexConfig(strings.TrimPrefix(arg, "--config=")):
+			return errors.New("cannot override protected Codex configuration in a Safe Session")
 		}
 	}
 	return nil
 }
 
-func isAppsConfig(value string) bool {
+func isProtectedCodexConfig(value string) bool {
 	key, _, ok := strings.Cut(value, "=")
-	return ok && strings.EqualFold(strings.TrimSpace(key), "features.apps")
+	if !ok {
+		return false
+	}
+	key = strings.ToLower(strings.TrimSpace(key))
+	return key == "model_provider" ||
+		key == "model_providers" ||
+		key == "model_providers.anonmyz" ||
+		key == "features" ||
+		key == "features.apps" ||
+		key == "features.enable_request_compression" ||
+		strings.HasPrefix(key, "model_providers.anonmyz.")
+}
+
+func isProtectedFeature(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "apps" || value == "enable_request_compression" || value == "request_compression"
 }
 
 func shutdownHTTPServer(server *http.Server) {

@@ -52,7 +52,9 @@ func TestVaultReset(t *testing.T) {
 	t.Parallel()
 
 	v := New(10)
-	v.Store("[[LABEL_1]]", "val1")
+	if err := v.Store("[[LABEL_1]]", "val1"); err != nil {
+		t.Fatal(err)
+	}
 	v.Reset()
 
 	stats := v.Stats()
@@ -70,8 +72,12 @@ func TestVaultStatsAndHits(t *testing.T) {
 	t.Parallel()
 
 	v := New(10)
-	v.Store("[[LABEL_1]]", "val1")
-	v.Store("[[LABEL_2]]", "val2")
+	if err := v.Store("[[LABEL_1]]", "val1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Store("[[LABEL_2]]", "val2"); err != nil {
+		t.Fatal(err)
+	}
 
 	v.Retrieve("[[LABEL_1]]")
 	v.Retrieve("[[LABEL_1]]")
@@ -106,7 +112,9 @@ func TestVaultConcurrency(t *testing.T) {
 			for j := 0; j < opsPerGoroutine; j++ {
 				label := fmt.Sprintf("[[LABEL_%d_%d]]", gID, j)
 				val := fmt.Sprintf("val_%d_%d", gID, j)
-				v.Store(label, val)
+				if err := v.Store(label, val); err != nil {
+					t.Errorf("store: %v", err)
+				}
 			}
 		}(i)
 	}

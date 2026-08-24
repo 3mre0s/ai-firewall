@@ -15,12 +15,38 @@ package masker
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/3mre0s/ai-firewall/config"
 	"github.com/3mre0s/ai-firewall/vault"
 )
+
+func TestLargeSafeBodyAllocationBudget(t *testing.T) {
+	cfg := config.LoadForTest()
+	cfg.MaskPaths = false
+	cfg.MaskEmails = false
+	scope := New(vault.New(cfg.VaultSizeLimit), cfg).NewScope()
+	body := strings.Repeat("safe payload ", (1<<20)/13+1)[:1<<20]
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	result := scope.Mask(body)
+	runtime.ReadMemStats(&after)
+
+	if result.Text != body {
+		t.Fatal("safe body changed during masking")
+	}
+	if unsafe.StringData(result.Text) != unsafe.StringData(body) {
+		t.Fatal("safe body backing storage was copied")
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 2<<20 {
+		t.Fatalf("safe 1 MiB body allocated %d bytes, budget is %d", allocated, 2<<20)
+	}
+}
 
 // ── helpers (yardımcılar) ──────────────────────────────────────────────────────
 

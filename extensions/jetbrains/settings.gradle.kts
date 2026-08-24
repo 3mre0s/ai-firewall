@@ -6,7 +6,9 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // The IntelliJ Gradle plugin contributes JetBrains repositories while
+    // resolving the target IDE. Allow those project repositories explicitly.
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
         mavenCentral()
     }

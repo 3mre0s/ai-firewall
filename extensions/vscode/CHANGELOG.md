@@ -1,5 +1,11 @@
 # Change Log
 
+## 0.2.0
+
+- Restrict executable discovery to trusted global settings and standard install paths.
+- Add health, binary-trust, and child-process lifecycle tests.
+- Package the extension as a verified release asset.
+
 ## 0.1.0
 
 - Initial private beta scaffold.

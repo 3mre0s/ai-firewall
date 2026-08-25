@@ -1,0 +1,13 @@
+$ anonmyz demo --non-interactive
+
+[DETECTED] OpenAI API key
+[MASKED]   Replaced with OAI_KEY_91F9B626
+[DETECTED] GitHub token
+[MASKED]   Replaced with GH_PAT_F0E21040
+[DETECTED] inline password
+[MASKED]   Replaced with SECRET_CD6DDD73
+[DETECTED] private file path
+[MASKED]   Replaced with UNIX_PATH_BFCFD5BC
+[UPSTREAM] Original sensitive values absent; placeholders present
+[STREAM]   Split placeholder restored correctly
+[RESULT]   4 sensitive values prevented from leaving this machine

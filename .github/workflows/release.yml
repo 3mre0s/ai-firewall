@@ -42,6 +42,7 @@ jobs:
           npm ci
           npm audit --audit-level=high
           npm test
+          mkdir -p ../../dist
           npx --no-install vsce package --out ../../dist/local-ai-firewall.vsix
 
       - name: Install Syft for release SBOMs

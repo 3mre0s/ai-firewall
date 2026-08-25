@@ -1,6 +1,8 @@
 # Anonmyz
 
-**Anonmyz is a local-first DLP gateway that masks secrets in coding-agent requests before they reach a cloud model, then restores them only on your machine.** No Anonmyz cloud service, account, or telemetry.
+**Your coding agent can accidentally send API keys, credentials, personal data, and private file paths to a cloud model. Anonmyz stops that data at the network boundary.**
+
+Anonmyz is a local-first DLP gateway: it detects sensitive values, replaces them with request-scoped placeholders before the request leaves your machine, and restores them locally in the model response. There is no Anonmyz cloud, account, telemetry, or prompt retention.
 
 [![Go](https://img.shields.io/badge/go-1.22+-blue)](#build-from-source)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -9,37 +11,49 @@
 [![GitHub stars](https://img.shields.io/github/stars/3mre0s/ai-firewall)](https://github.com/3mre0s/ai-firewall/stargazers)
 [![Go Report Card](https://goreportcard.com/badge/github.com/3mre0s/ai-firewall)](https://goreportcard.com/report/github.com/3mre0s/ai-firewall)
 
-> **Project status:** Anonmyz is pre-1.0 and actively developed. The explicit proxy and VS Code integration are the recommended paths; transparent MITM and JetBrains support should be evaluated against your environment before broad rollout. Security fixes target the latest release.
+> **Project status:** Anonmyz is pre-1.0 and actively developed. The explicit proxy, deterministic demo, and VS Code integration are the recommended paths. Transparent MITM and JetBrains support should be evaluated in your environment before broad rollout.
 
-## Try it locally in under two minutes — no API key
+## See the protection in 60 seconds
 
-Prerequisite: Go 1.22 or later. The demo uses only loopback networking and does not contact OpenAI or any other external service.
+![Anonmyz real production-path demo](docs/demo.gif)
+
+The recording is captured from the real `anonmyz demo --non-interactive` command. It starts a mock model and Anonmyz on dynamic loopback ports, sends four unmistakably fake secrets through the production masking engine, proves the originals never reached the mock provider, tests a placeholder split across streamed writes, and verifies local restoration. It never contacts an AI provider and needs no API key. Reproduce the capture and GIF with `python docs/make_gif.py --capture` (Go and Pillow required).
+
+## Install with one command
+
+Linux and macOS:
 
 ```bash
-go build -trimpath -o anonmyz .
-./anonmyz demo --non-interactive
+curl -fsSL https://raw.githubusercontent.com/3mre0s/ai-firewall/main/scripts/install.sh | sh
 ```
 
-Windows PowerShell:
+Windows PowerShell (64-bit):
 
 ```powershell
-go build -trimpath -o anonmyz.exe .
-.\anonmyz.exe demo --non-interactive
+irm https://raw.githubusercontent.com/3mre0s/ai-firewall/main/scripts/install.ps1 | iex
+```
+
+Both installers download the latest matching release archive, verify it against the release's SHA-256 checksum, and install to a user-owned directory without administrator access. Review [`install.sh`](scripts/install.sh) or [`install.ps1`](scripts/install.ps1) before piping it to a shell. Set `ANONMYZ_VERSION` to pin a release or `ANONMYZ_INSTALL_DIR` to choose the destination.
+
+Then prove the complete local path yourself:
+
+```bash
+anonmyz demo --non-interactive
 ```
 
 Expected result (placeholder suffixes vary because they are generated with cryptographic randomness):
 
 ```text
-[DETECTED] GitHub Personal Access Token v1
+[DETECTED] OpenAI API key
+[MASKED]   Replaced with OAI_KEY_6775C841
+[DETECTED] GitHub token
 [MASKED]   Replaced with GH_PAT_7B31A2C4
 [UPSTREAM] Original sensitive values absent; placeholders present
 [STREAM]   Split placeholder restored correctly
 [RESULT]   4 sensitive values prevented from leaving this machine
 ```
 
-The command starts a mock model and Anonmyz on dynamically selected loopback ports, sends four unmistakably fake values through the production masker, proves the originals are absent upstream, splits a placeholder across flushed SSE writes, verifies local restoration, shuts down both servers, and exits non-zero on any failed assertion. Run it twice to verify clean port release.
-
-Prebuilt release archives named `anonmyz-<os>-<arch>` run the same command without rebuilding. Compatibility archives and the legacy `ai-firewall` binary name remain available for existing integrations.
+The command exits non-zero if any privacy assertion fails. Prebuilt archives named `anonmyz-<os>-<arch>` contain the same binary; compatibility archives and the legacy `ai-firewall` name remain available for existing integrations.
 
 ## Architecture in 20 seconds
 
@@ -137,11 +151,9 @@ Codex with GPT-5.6 was used to inspect the existing architecture and history, ve
 
 ---
 
-![demo](docs/demo.gif)
+## Manual installation and VS Code
 
-## Quickstart (3 steps)
-
-**1. Install binary**
+**1. Download a binary manually**
 
 ```bash
 # Linux amd64

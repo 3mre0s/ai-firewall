@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-25
+
 ### Security
 
 - Require HTTPS for remote `UPSTREAM_URL` targets; allow plaintext HTTP only for loopback development services and reject URL userinfo, query parameters, and fragments.
@@ -20,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add checksum-verifying, one-command installers for Linux, macOS, and Windows that install without administrator access.
+- Add an approximately 60-second demo recording captured from the deterministic production-path demo command.
+- Rewrite the README opening around the user problem, local trust boundary, one-command install, and independently verifiable demo.
 - Add `anonmyz doctor` and `anonmyz --check-config` for credential-safe configuration validation without starting listeners.
 - Add a shared transport-independent `dlp.Engine` for explicit-proxy and MITM request scopes, standard responses, and streaming restoration.
 - Add request-correlated JSON security events for request, upstream, restoration, and blocking decisions.
@@ -141,5 +146,6 @@ Environment variable-only; no config file needed.
 
 ---
 
-[Unreleased]: https://github.com/torpilsiz/Ai-Firewall/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/torpilsiz/Ai-Firewall/releases/tag/v0.1.0
+[Unreleased]: https://github.com/3mre0s/ai-firewall/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/3mre0s/ai-firewall/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/3mre0s/ai-firewall/releases/tag/v0.1.0

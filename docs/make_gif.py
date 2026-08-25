@@ -1,217 +1,113 @@
 #!/usr/bin/env python3
-"""
-Scripted terminal-animation GIF for Local AI Firewall.
-Renders a typewriter demo entirely in-process — no display, no VHS, no ttyd.
+"""Capture and render the production demo as an approximately 60-second GIF."""
 
-Output: docs/demo.gif
-"""
-from __future__ import annotations
-import sys
+import argparse
+import subprocess
 from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont
 
-# ── canvas & font ─────────────────────────────────────────────────────────
-FONT    = r"C:\Windows\Fonts\consola.ttf"
-FSIZE   = 15
-PAD     = 18          # px padding around text area
-COLS    = 96          # character columns
-ROWS    = 28          # character rows
-OUT     = Path(__file__).parent / "demo.gif"
 
-# ── Dracula palette ───────────────────────────────────────────────────────
-BG      = (40,  42,  54)   # background
-FG      = (248, 248, 242)  # foreground
-YELLOW  = (241, 250, 140)  # prompt $, commands
-CYAN    = (139, 233, 253)  # section headers
-RED     = (255,  85,  85)  # real secrets  ← danger
-GREEN   = (80,  250, 123)  # vault tokens  ← safe / success
-PURPLE  = (189, 147, 249)  # banner lines
-DIM     = (98,  114, 164)  # comments
+ROOT = Path(__file__).resolve().parent
+REPOSITORY_ROOT = ROOT.parent
+OUTPUT = ROOT / "demo.gif"
+CAPTURE = ROOT / "demo-output.txt"
+FONT_PATHS = (
+    Path(r"C:\Windows\Fonts\consola.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+    Path("/System/Library/Fonts/Menlo.ttc"),
+)
 
-# ── script: list of (action, *args) ──────────────────────────────────────
-# Actions:
-#   ("type",  text, colour)          — typewriter, one char / frame
-#   ("line",  text, colour)          — instant full line
-#   ("blank",)                       — empty line
-#   ("pause", ms)                    — hold current frame
-#   ("hr",    char, colour)          — full-width horizontal rule
-#   ("clear",)                       — clear screen
-#   ("inline", [(text,colour), ...]) — coloured segments on one line
+BACKGROUND = (13, 17, 23)
+FOREGROUND = (230, 237, 243)
+DIM = (139, 148, 158)
+CYAN = (88, 166, 255)
+GREEN = (63, 185, 80)
+YELLOW = (210, 153, 34)
 
-PROMPT = [("$ ", YELLOW)]
 
-SCRIPT = [
-    # ── title ─────────────────────────────────────────────────────────────
-    ("blank",),
-    ("line",  "  Local AI Firewall — live demo",             CYAN),
-    ("line",  "  Secrets masked before leaving your machine.", DIM),
-    ("blank",),
-    ("pause", 1200),
+def load_font(size: int) -> ImageFont.FreeTypeFont:
+    for path in FONT_PATHS:
+        if path.exists():
+            return ImageFont.truetype(str(path), size)
+    raise SystemExit("No supported monospace font found")
 
-    # ── start firewall ────────────────────────────────────────────────────
-    ("type",  "$ FORWARD_API_KEY=sk-ant-... ./ai-firewall",  YELLOW),
-    ("pause", 400),
-    ("line",  "╔══════════════════════════════════════════════╗", PURPLE),
-    ("line",  "║         >>  Local AI Firewall  v0.1.0        ║", PURPLE),
-    ("line",  "╠══════════════════════════════════════════════╣", PURPLE),
-    ("line",  "║  Listen  :8080   │  Upstream: api.anthropic.com ║", PURPLE),
-    ("line",  "║  Patterns: 28    │  Providers: 14              ║", PURPLE),
-    ("line",  "╚══════════════════════════════════════════════╝", PURPLE),
-    ("pause", 900),
 
-    # ── send request with secrets ─────────────────────────────────────────
-    ("blank",),
-    ("type",  "$ curl localhost:8080/v1/messages \\", YELLOW),
-    ("type",  "    -d '{\"messages\":[{\"role\":\"user\",\"content\":", YELLOW),
-    ("type",  '         "PAT: ghp_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ', YELLOW),
-    ("type",  '          email: alice@acme-corp.com\"}]}\'', YELLOW),
-    ("pause", 600),
+def colour(line: str) -> tuple[int, int, int]:
+    if line.startswith("$"):
+        return CYAN
+    if line.startswith("[DETECTED]"):
+        return YELLOW
+    if line.startswith(("[MASKED]", "[UPSTREAM]", "[STREAM]", "[RESULT]")):
+        return GREEN
+    return FOREGROUND
 
-    # ── what the provider received (KEY MOMENT) ───────────────────────────
-    ("blank",),
-    ("hr",    "─", CYAN),
-    ("line",  "  what the AI provider received:", CYAN),
-    ("hr",    "─", CYAN),
-    ("line",  "  {", FG),
-    ("line",  '    "messages": [{', FG),
-    ("line",  '      "role": "user",', FG),
-    ("line",  '      "content": "PAT: ', FG),
-    ("inline", [
-        ('        ', FG),
-        ('[[GH_PAT_F1B7B69D]]', GREEN),
-        ('   ← secret replaced by vault token', DIM),
-    ]),
-    ("inline", [
-        ('        email: ', FG),
-        ('[[EMAIL_73AB1869]]', GREEN),
-        ('       ← PII replaced', DIM),
-    ]),
-    ("line",  '    }]', FG),
-    ("line",  '  }', FG),
-    ("pause", 2800),   # ← hold here so reader can see the masked output
 
-    # ── response: secrets restored ────────────────────────────────────────
-    ("blank",),
-    ("hr",    "─", CYAN),
-    ("line",  "  client response (secrets restored by firewall):", CYAN),
-    ("hr",    "─", CYAN),
-    ("inline", [
-        ('  "content": "PAT: ', FG),
-        ('ghp_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ', RED),
-        ('  ← restored', DIM),
-    ]),
-    ("inline", [
-        ('             email: ', FG),
-        ('alice@acme-corp.com', RED),
-        ('                 ← restored', DIM),
-    ]),
-    ("blank",),
-    ("line",  "  [OK]  Provider never saw plaintext — only vault tokens.", GREEN),
-    ("line",  "  [OK]  Originals restored in the response automatically.", GREEN),
-    ("pause", 4000),  # ← final hold before loop
-]
+def capture_demo() -> None:
+    result = subprocess.run(
+        ["go", "run", ".", "demo", "--non-interactive"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    CAPTURE.write_text(
+        "$ anonmyz demo --non-interactive\n\n" + result.stdout.strip() + "\n",
+        encoding="utf-8",
+    )
 
-# ─────────────────────────────────────────────────────────────────────────
 
-def build_frames(font: ImageFont.FreeTypeFont):
-    bbox = font.getbbox("W")
-    cw   = bbox[2]          # character width
-    ch   = bbox[3] + 3      # character height + leading
-    W    = cw * COLS + PAD * 2
-    H    = ch * ROWS + PAD * 2
-
+def render() -> None:
+    lines = CAPTURE.read_text(encoding="utf-8").splitlines()
+    font = load_font(22)
+    title_font = load_font(24)
+    width, height = 1280, 720
+    line_height = 34
     frames: list[Image.Image] = []
     durations: list[int] = []
-    lines: list[list[tuple[str, tuple]]] = [[]]  # list of rows; each row = [(text, colour)]
 
-    def snapshot(hold_ms: int = 100):
-        img  = Image.new("RGB", (W, H), BG)
-        draw = ImageDraw.Draw(img)
-        for r, row in enumerate(lines[-ROWS:]):
-            x = PAD
-            y = PAD + r * ch
-            for text, colour in row:
-                draw.text((x, y), text, font=font, fill=colour)
-                x += cw * len(text)
-        frames.append(img)
-        durations.append(hold_ms)
+    def frame(visible: int, status: str, duration: int) -> None:
+        image = Image.new("RGB", (width, height), BACKGROUND)
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((28, 24, width - 28, height - 24), radius=16, outline=(48, 54, 61), width=2)
+        draw.ellipse((52, 48, 68, 64), fill=(248, 81, 73))
+        draw.ellipse((78, 48, 94, 64), fill=(210, 153, 34))
+        draw.ellipse((104, 48, 120, 64), fill=GREEN)
+        draw.text((148, 42), "Anonmyz — local-first AI privacy", font=title_font, fill=FOREGROUND)
+        draw.text((54, 94), "Real production-path demo · no API key · loopback only", font=font, fill=DIM)
 
-    def newline():
-        lines.append([])
+        y = 152
+        for line in lines[:visible]:
+            draw.text((58, y), line, font=font, fill=colour(line))
+            y += line_height
 
-    def append_text(text: str, colour: tuple):
-        if not lines:
-            lines.append([])
-        lines[-1].append((text, colour))
+        draw.text((58, height - 72), status, font=font, fill=DIM)
+        frames.append(image)
+        durations.append(duration)
 
-    for action in SCRIPT:
-        op = action[0]
+    frame(0, "Starting the local deterministic demo…", 2500)
+    for index in range(1, len(lines) + 1):
+        line = lines[index - 1]
+        hold = 2600 if line.startswith(("[UPSTREAM]", "[STREAM]")) else 1500
+        frame(index, "Mask locally → send placeholders → restore locally", hold)
+    frame(len(lines), "Done: four sensitive values never left this machine in plaintext.", 35000)
 
-        if op == "blank":
-            newline()
-            snapshot(80)
-
-        elif op == "pause":
-            if frames:
-                durations[-1] += action[1]
-            else:
-                newline(); snapshot(action[1])
-
-        elif op == "clear":
-            lines.clear(); lines.append([])
-            snapshot(100)
-
-        elif op == "hr":
-            _, char, colour = action
-            append_text(char * COLS, colour)
-            snapshot(60)
-            newline()
-
-        elif op == "line":
-            _, text, colour = action
-            append_text(text, colour)
-            snapshot(80)
-            newline()
-
-        elif op == "inline":
-            _, segments = action
-            for text, colour in segments:
-                append_text(text, colour)
-            snapshot(80)
-            newline()
-
-        elif op == "type":
-            _, text, colour = action
-            # emit 2 chars per frame → half the frames, same apparent speed
-            for i in range(0, len(text), 2):
-                chunk = text[i:i+2]
-                append_text(chunk, colour)
-                snapshot(55)          # ~36 chars/second at 2 chars/frame
-            snapshot(120)             # brief pause at end of line
-            newline()
-
-    return frames, durations
-
-
-def main():
-    print("Building scripted demo GIF…", flush=True)
-    font = ImageFont.truetype(FONT, FSIZE)
-    frames, durations = build_frames(font)
-
-    print(f"  {len(frames)} frames — saving…", flush=True)
-    # Quantize to 64-colour palette — GIF native, cuts file size ~3×
-    palette_frames = [f.quantize(colors=64, method=Image.Quantize.FASTOCTREE) for f in frames]
-    palette_frames[0].save(
-        OUT,
+    palette = [item.quantize(colors=64, method=Image.Quantize.FASTOCTREE) for item in frames]
+    palette[0].save(
+        OUTPUT,
         save_all=True,
-        append_images=palette_frames[1:],
+        append_images=palette[1:],
         duration=durations,
         loop=0,
         optimize=True,
     )
-    kb = OUT.stat().st_size // 1024
-    print(f"  Saved {OUT}  ({kb} KB)", flush=True)
+    print(f"Rendered {OUTPUT} ({sum(durations) / 1000:.1f}s)")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--capture", action="store_true", help="run the real demo before rendering")
+    arguments = parser.parse_args()
+    if arguments.capture:
+        capture_demo()
+    render()
